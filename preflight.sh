@@ -19,7 +19,11 @@ VENV="$RADMIN_VENV"; VMDIR="$RADMIN_VMDIR"; TAP="$RADMIN_TAP"
 NMCON="$RADMIN_NMCON"; TARGET_HOST="$RADMIN_HOST"; USER_PASS="$RADMIN_CRED"
 DHCP_SVC="$RADMIN_DHCP_SVC"
 
-QUIET=0; [[ "${1:-}" == "-q" ]] && QUIET=1
+QUIET=0; LIGHT=0
+for a in "$@"; do
+  [[ "$a" == "-q" ]] && QUIET=1
+  [[ "$a" == "--light" ]] && LIGHT=1   # so prepara venv+tap+DHCP; NAO liga a VM
+done
 ok(){ [[ $QUIET -eq 0 ]] && echo "  [ok] $*"; }
 fix(){ echo "  [fix] $*"; }
 err(){ echo "  [ERRO] $*" >&2; }
@@ -55,6 +59,13 @@ if [[ "$TAP_IP" == 26.* ]]; then
   else fix "iniciando $DHCP_SVC"; systemctl start "$DHCP_SVC" 2>/dev/null || pkexec systemctl start "$DHCP_SVC"; fi
 else
   ok "modo ICS/NAT ($TAP_IP) — DHCP fica na VM, nada a fazer"
+fi
+
+# modo --light: para aqui. Prepara a pilha (venv+tap+DHCP) mas NAO liga a VM
+# nem espera boot/WMI. A UI abre na hora; a VM so liga quando o usuario mandar.
+if [[ $LIGHT -eq 1 ]]; then
+  [[ $FAIL -eq 0 ]] && { [[ $QUIET -eq 0 ]] && echo ">> pilha preparada (modo leve; VM nao ligada)."; exit 0; }
+  err "preparo leve incompleto"; exit 1
 fi
 
 # 4. VM ligada --------------------------------------------------------

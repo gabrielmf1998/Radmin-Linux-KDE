@@ -5,7 +5,7 @@ source "$SELF/env.sh"
 VENV="$RADMIN_VENV"
 
 echo "Preparando a pilha Radmin…"
-if ! "$SELF/preflight.sh"; then
+if ! "$SELF/preflight.sh" --light -q; then
   # UI grafica de erro se o preflight falhar e houver display
   if [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]]; then
     "$VENV/bin/python" - <<'PY' 2>/dev/null || true
