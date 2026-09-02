@@ -86,6 +86,37 @@ def power_on() -> bool:
         return False
 
 
+def is_responsive(timeout: float = 3) -> bool:
+    """A VM responde na rede? (ping ao host da VM)."""
+    host = HOST_IP()
+    try:
+        r = subprocess.run(["ping", "-c1", "-W", str(int(timeout)), host],
+                           capture_output=True, timeout=timeout + 2)
+        return r.returncode == 0
+    except Exception:  # noqa
+        return False
+
+
+def HOST_IP() -> str:
+    import config
+    return config.HOST
+
+
+def recover() -> str:
+    """Watchdog: se o processo esta vivo mas a VM nao responde (travada),
+    forca desligar e religar. Retorna o que fez."""
+    if not is_running():
+        power_on()
+        return "started"
+    if is_responsive():
+        return "ok"
+    # processo vivo mas sem resposta = travada
+    if not power_off(timeout=30):
+        power_off_hard()
+    power_on()
+    return "recovered"
+
+
 if __name__ == "__main__":
     import sys
     if len(sys.argv) > 1:

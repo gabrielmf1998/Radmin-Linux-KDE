@@ -282,12 +282,43 @@ class MainWindow(QMainWindow):
         self.tray.setToolTip("Radmin VPN (Linux)")
         menu = QMenu()
         show = QAction("Show", self); show.triggered.connect(self._show_raise); menu.addAction(show)
-        ref = QAction("Refresh", self); ref.triggered.connect(self.refresh); menu.addAction(ref)
+        menu.addSeparator()
+        # controle total pela bandeja — o usuario nunca toca na VM
+        self.trayPower = QAction("Turn VM on/off", self)
+        self.trayPower.triggered.connect(self.toggle_power); menu.addAction(self.trayPower)
+        self.trayConn = QAction("Connect / Disconnect", self)
+        self.trayConn.triggered.connect(self._tray_toggle_conn); menu.addAction(self.trayConn)
+        menu.addSeparator()
+        d = QAction("Full diagnostics (repair)", self); d.triggered.connect(self.do_health); menu.addAction(d)
+        u = QAction("Check for update", self); u.triggered.connect(self.do_check_update); menu.addAction(u)
+        s = QAction("Sync members", self); s.triggered.connect(self.discover_now); menu.addAction(s)
+        r = QAction("Refresh", self); r.triggered.connect(self.refresh); menu.addAction(r)
         menu.addSeparator()
         quit_ = QAction("Quit", self); quit_.triggered.connect(QApplication.quit); menu.addAction(quit_)
         self.tray.setContextMenu(menu)
         self.tray.activated.connect(self._tray_activated)
         self.tray.show()
+
+    def _tray_toggle_conn(self):
+        if self._last_service == "Running":
+            self.do_disconnect()
+        else:
+            self.do_connect()
+
+    def _update_tray(self):
+        """Reflete o estado no tooltip e no menu da bandeja."""
+        if not self._vm_running:
+            tip = "Radmin VPN — VM off"
+        elif self._last_service == "Running":
+            n = sum(1 for i in range(self.listv.count())
+                    if isinstance(self.listv.itemAt(i).widget(), PeerRow)
+                    and self.listv.itemAt(i).widget()._online)
+            tip = f"Radmin VPN — online ({self._node_ip})"
+        else:
+            tip = "Radmin VPN — disconnected"
+        self.tray.setToolTip(tip)
+        if hasattr(self, "trayConn"):
+            self.trayConn.setText("Disconnect" if self._last_service == "Running" else "Connect")
 
     # ---------- data ----------
     def refresh(self):
@@ -317,6 +348,7 @@ class MainWindow(QMainWindow):
             self.badge.setStyleSheet(QSS)
             self.power.setPixmap(icons.power_pixmap(False, 48))
             self._sync_actions(False)
+            self._update_tray()
             self._relayout([])
             return
 
@@ -331,6 +363,7 @@ class MainWindow(QMainWindow):
         self.badge.setObjectName("badge" if on else "badgeOff")
         self.badge.setStyleSheet(QSS)
         self._sync_actions(on)
+        self._update_tray()
 
         # descobre novos peers pelo ARP (a shim ja filtra 26.0.0.1)
         for p in st.peers:
@@ -421,6 +454,14 @@ class MainWindow(QMainWindow):
     # ---------- health / auto-heal (silencioso, em background) ----------
     def health_now(self):
         if self._closing or self._busy:
+            return
+        # watchdog: processo vivo mas VM travada (nao responde) -> recupera
+        if vmctl.is_running() and not vmctl.is_responsive():
+            self.status.setText("● VM unresponsive — recovering…")
+            self._busy = True
+            self._action = ActionWorker(lambda: (vmctl.recover() != "ok", "watchdog"))
+            self._action.done.connect(lambda ok, log: self._vm_action_done("Recovering VM"))
+            self._action.start()
             return
         if not self._vm_running:
             return
