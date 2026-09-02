@@ -672,19 +672,13 @@ class MainWindow(QMainWindow):
             self._open_vnc()
 
     def _open_vnc(self):
-        import subprocess
-        view = os.path.join(os.path.dirname(os.path.dirname(__file__)),
-                            "..", "..", "VMs", "ntlite-bench", "bench-view.sh")
-        # caminho absoluto conhecido da bancada
-        candidates = ["/mnt/samsung-980pro/VMs/ntlite-bench/bench-view.sh",
-                      os.path.abspath(view)]
-        for c in candidates:
-            if os.path.exists(c):
-                subprocess.Popen(["bash", c])
-                self.status.setText("● opening VM VNC…")
-                # apos o usuario mexer na GUI, atualiza em 20s
-                QTimer.singleShot(20000, self.refresh)
-                return
+        import subprocess, config
+        view = config.VIEW_SCRIPT
+        if os.path.exists(view):
+            subprocess.Popen(["bash", view])
+            self.status.setText("● opening VM VNC…")
+            QTimer.singleShot(20000, self.refresh)
+            return
         self.status.setText("● bench-view.sh not found")
 
     # ---------- misc ----------

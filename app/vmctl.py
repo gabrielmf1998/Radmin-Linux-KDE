@@ -6,10 +6,11 @@ Usa o monitor do QEMU (socket) e os scripts da bancada.
 from __future__ import annotations
 import os, socket, subprocess, time
 
-VMDIR = os.environ.get("RADMIN_VMDIR", "/mnt/samsung-980pro/VMs/ntlite-bench")
+import config
+VMDIR = config.VMDIR
 MONITOR = os.path.join(VMDIR, "monitor.sock")
 PIDFILE = os.path.join(VMDIR, "qemu.pid")
-RUN = os.path.join(VMDIR, "bench-run.sh")
+RUN = config.RUN_SCRIPT
 PREFLIGHT = os.path.join(os.path.dirname(os.path.dirname(__file__)), "preflight.sh")
 
 

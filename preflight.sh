@@ -14,13 +14,10 @@
 set -uo pipefail
 
 SELF="$(cd "$(dirname "$0")" && pwd)"
-VENV="${RADMIN_VENV:-/mnt/samsung-980pro/VMs/ntlite-bench/.recon-venv}"
-VMDIR="${RADMIN_VMDIR:-/mnt/samsung-980pro/VMs/ntlite-bench}"
-TAP="${RADMIN_TAP:-tapradmin}"
-NMCON="${RADMIN_NMCON:-radmin-bridge}"
-TARGET_HOST="${RADMIN_HOST:-192.168.137.1}"
-USER_PASS="${RADMIN_CRED:-bench:bench}"
-DHCP_SVC="dnsmasq-tapradmin.service"
+source "$SELF/env.sh"
+VENV="$RADMIN_VENV"; VMDIR="$RADMIN_VMDIR"; TAP="$RADMIN_TAP"
+NMCON="$RADMIN_NMCON"; TARGET_HOST="$RADMIN_HOST"; USER_PASS="$RADMIN_CRED"
+DHCP_SVC="$RADMIN_DHCP_SVC"
 
 QUIET=0; [[ "${1:-}" == "-q" ]] && QUIET=1
 ok(){ [[ $QUIET -eq 0 ]] && echo "  [ok] $*"; }

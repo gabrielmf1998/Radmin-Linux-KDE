@@ -6,10 +6,11 @@ from __future__ import annotations
 import json, re, subprocess, time, os, shutil
 from dataclasses import dataclass, field
 
-VENV = "/mnt/samsung-980pro/VMs/ntlite-bench/.recon-venv"
-WMIEXEC = f"{VENV}/bin/python {VENV}/bin/wmiexec.py"
-TARGET = os.environ.get("RADMIN_TARGET", "bench:bench@192.168.137.1")
-SHIM_PATH = os.environ.get("RADMIN_SHIM", r"C:\radmin-shim.ps1")
+import config
+VENV = config.VENV
+WMIEXEC = config.WMIEXEC
+TARGET = config.TARGET
+SHIM_PATH = config.SHIM_PATH
 
 _MARK_RE = re.compile(r"<<<RADMINJSON>>>\s*(.*?)\s*<<<END>>>", re.S)
 

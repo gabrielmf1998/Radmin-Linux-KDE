@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Abre o clone Radmin VPN (Linux), auto-reparando a pilha antes.
 SELF="$(cd "$(dirname "$0")" && pwd)"
-VENV="${RADMIN_VENV:-/mnt/samsung-980pro/VMs/ntlite-bench/.recon-venv}"
+source "$SELF/env.sh"
+VENV="$RADMIN_VENV"
 
 echo "Preparando a pilha Radmin…"
 if ! "$SELF/preflight.sh"; then

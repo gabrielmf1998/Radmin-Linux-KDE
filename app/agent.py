@@ -6,7 +6,8 @@ from __future__ import annotations
 import base64, json, re, subprocess
 import backend
 
-AGENT_DIR = r"C:\radmin-agent"
+import config
+AGENT_DIR = config.AGENT_DIR
 _UPD_RE = re.compile(r"<<<UPD>>>\s*(.*?)\s*<<<END>>>", re.S)
 _HEALTH_RE = re.compile(r"<<<HEALTH>>>\s*(.*?)\s*<<<END>>>", re.S)
 
