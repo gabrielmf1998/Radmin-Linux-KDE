@@ -1,8 +1,12 @@
 [Desktop Entry]
 Type=Application
-Name=Radmin VPN
-Comment=Radmin VPN on Linux (headless VM)
+Name=Radmin VPN (Unofficial)
+GenericName=Mesh VPN
+Comment=Unofficial Radmin VPN for Linux — join your friends' mesh network
 Exec=radmin-linux
-Icon=network-vpn
+Icon=radmin-linux
 Terminal=false
 Categories=Network;
+Keywords=radmin;vpn;mesh;gaming;lan;remote;
+StartupNotify=true
+StartupWMClass=radmin-vpn

@@ -22,4 +22,8 @@ exec /usr/share/radmin-linux/radmin-linux.sh "$@"
 EOF
   install -Dm644 packaging/radmin-linux.desktop \
     "$pkgdir/usr/share/applications/radmin-linux.desktop"
+  for sz in 16 22 24 32 48 64 128 256; do
+    install -Dm644 "assets/radmin-linux-$sz.png" \
+      "$pkgdir/usr/share/icons/hicolor/${sz}x${sz}/apps/radmin-linux.png"
+  done
 }

@@ -39,11 +39,16 @@ install -d %{buildroot}%{_bindir}
 ln -s %{_datadir}/radmin-linux/radmin-linux.sh %{buildroot}%{_bindir}/radmin-linux
 install -d %{buildroot}%{_datadir}/applications
 install -m644 %{srcdir}/packaging/radmin-linux.desktop %{buildroot}%{_datadir}/applications/
+for sz in 16 22 24 32 48 64 128 256; do
+  install -Dm644 %{srcdir}/assets/radmin-linux-$sz.png \
+    %{buildroot}%{_datadir}/icons/hicolor/${sz}x${sz}/apps/radmin-linux.png
+done
 
 %files
 %{_datadir}/radmin-linux/
 %{_bindir}/radmin-linux
 %{_datadir}/applications/radmin-linux.desktop
+%{_datadir}/icons/hicolor/*/apps/radmin-linux.png
 
 %post
 echo "Radmin-Linux instalado. Finalize com:"

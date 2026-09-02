@@ -194,20 +194,23 @@ RADMIN_VIEW=$VMDIR/bench-view.sh
 CFG
 ok "config em $CONF"
 
-# ---------- 8. atalho .desktop ----------
-say "8/8  Atalho no menu"
+# ---------- 8. icones + atalho .desktop ----------
+say "8/8  Icone e atalho no menu"
+ICONS="$HOME/.local/share/icons/hicolor"
+# instala o icone em cada tamanho (SEM criar index.theme; o do sistema cuida disso)
+for sz in 16 22 24 32 48 64 128 256; do
+  if [[ -f "$SELF/assets/radmin-linux-$sz.png" ]]; then
+    mkdir -p "$ICONS/${sz}x${sz}/apps"
+    cp "$SELF/assets/radmin-linux-$sz.png" "$ICONS/${sz}x${sz}/apps/radmin-linux.png"
+  fi
+done
+gtk-update-icon-cache -q "$ICONS" 2>/dev/null || true
+ok "icone instalado no hicolor"
+
 APPS="$HOME/.local/share/applications"
 mkdir -p "$APPS"
-cat > "$APPS/radmin-linux.desktop" <<DESK
-[Desktop Entry]
-Type=Application
-Name=Radmin VPN
-Comment=Radmin VPN on Linux
-Exec=$HOME_DIR/radmin-linux.sh
-Icon=network-vpn
-Terminal=false
-Categories=Network;
-DESK
+sed "s|^Exec=radmin-linux$|Exec=$HOME_DIR/radmin-linux.sh|" \
+    "$SELF/packaging/radmin-linux.desktop" > "$APPS/radmin-linux.desktop"
 update-desktop-database "$APPS" 2>/dev/null || true
 ok "atalho criado (procure 'Radmin VPN' no menu)"
 
