@@ -137,7 +137,8 @@ serviço para re-anunciar à mesh. Validado: muda e não reverte após reconexã
 | ferramenta | o que faz |
 |---|---|
 | `install.sh [IMG]` | monta a pilha num alvo limpo: KVM, deps, venv, código, importa a VM, cria tap+DHCP, escreve o config, cria o atalho |
-| `build-vm.sh --clean` | sai da rede atual, zera identidade, apaga logs, compacta → imagem-base distribuível |
+| `build-vm.sh --from-scratch WIN.iso` | provisiona a VM do ZERO: Windows desatendido → Radmin → agente → imagem-base. 100% automático. |
+| `build-vm.sh --clean` | limpa uma VM existente para distribuir (sai da rede, zera identidade) |
 | `packaging/build-rpm.sh` | gera o RPM (`radmin-linux-*.noarch.rpm`) |
 | `packaging/PKGBUILD` | pacote Arch (`makepkg`) |
 
