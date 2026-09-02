@@ -50,6 +50,19 @@ def disconnect(timeout: int = 60) -> tuple[bool, str]:
     return _run_ps(ps, timeout)
 
 
+def rename_node(new_name: str, timeout: int = 60) -> tuple[bool, str]:
+    """Muda o nome (Alias) do no que os outros peers veem. Persiste no registro
+    e reinicia o servico p/ re-anunciar a mesh."""
+    safe = new_name.replace('"', "").replace("'", "").strip()[:63]
+    ps = (
+        f'Set-ItemProperty "{REGBASE}" -Name Alias -Value "{safe}" -Type String;'
+        'Restart-Service RvControlSvc -Force;'
+        'Start-Sleep 3;'
+        f'if((Get-ItemProperty "{REGBASE}").Alias -eq "{safe}"){{Write-Output "<<<ACTOK>>>"}}'
+    )
+    return _run_ps(ps, timeout)
+
+
 def leave_network(guid: str, timeout: int = 60) -> tuple[bool, str]:
     """Remove a associacao de rede (sai da rede). guid inclui as chaves {}."""
     ps = (

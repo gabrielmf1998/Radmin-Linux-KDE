@@ -42,9 +42,9 @@ class Roster:
         return self.entries.get(ip, {}).get("host", "")
 
     def label_of(self, ip: str) -> str:
-        """apelido > hostname NetBIOS > IP"""
+        """apelido manual > hostname NetBIOS > nome descoberto na memoria > IP"""
         e = self.entries.get(ip, {})
-        return e.get("name") or e.get("host") or ip
+        return e.get("name") or e.get("host") or e.get("disc") or ip
 
     def set_name(self, ip: str, name: str) -> None:
         e = self.entries.setdefault(ip, {"name": "", "mac": "", "last_seen": 0})
@@ -60,3 +60,17 @@ class Roster:
     def forget(self, ip: str) -> None:
         self.entries.pop(ip, None)
         self.save()
+
+    def ingest(self, discovered: dict) -> int:
+        """Funde a lista descoberta {ip: nome} no roster. Nao sobrescreve
+        apelido que o usuario ja definiu. Guarda o nome descoberto em 'disc'.
+        Retorna quantos IPs novos entraram."""
+        novos = 0
+        for ip, nome in discovered.items():
+            if ip not in self.entries:
+                novos += 1
+            e = self.entries.setdefault(ip, {"name": "", "host": "", "mac": "", "last_seen": 0})
+            if nome:
+                e["disc"] = nome
+        self.save()
+        return novos

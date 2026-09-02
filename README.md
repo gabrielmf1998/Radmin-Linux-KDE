@@ -16,6 +16,7 @@ na VM Windows (bancada `ntlite-bench`). Fase 2: só leitura — nada aqui altera
     │   ├── roster.py   lista persistente de peers (offline + apelidos locais)
     │   ├── vmctl.py    liga/desliga a VM inteira (monitor QEMU + preflight)
     │   ├── agent.py    dispara os scripts do agente e lê updates
+    │   ├── discover.py dump da GUI → lista completa de peers (online+offline)
     │   └── icons.py    logo/sinal/power desenhados em QPainter
     ├── shim/
     │   └── radmin-shim.ps1   roda na VM, devolve JSON do estado do Radmin
@@ -111,3 +112,22 @@ sem tocar na VM. Menu **System → Diagnóstico completo** mostra o relatório v
 `radmin-update.ps1` baixa a página oficial na própria VM, extrai o maior
 `Radmin_VPN_<versão>.exe`, compara com o `RvRvpnGui.exe` instalado e instala se novo.
 Quando a Famatech publicar uma versão nova, o portal detecta sem nenhuma URL fixa.
+
+## Lista completa de membros (online E offline)
+
+Para dar confiança de que você está conectado a uma rede real, a UI mostra
+**todos os membros**, não só os ativos. A lista completa (a mesma da GUI do Radmin)
+vive só na memória do processo da GUI — `discover.py` faz um minidump do
+`RvRvpnGui`, baixa (~200MB, segundos pela tap) e extrai os IPs 26.x (via UTF-16,
+confiável) e os nomes (best-effort, correlação na memória).
+
+- roda automaticamente ~8s após abrir, e via **Network → Sync network members**
+- os IPs são a base sólida; nomes vêm de 3 fontes: apelido manual > NetBIOS
+  (online) > nome descoberto na memória > IP
+- o ping sweep mantém online/offline; offline aparece em cinza com X
+
+## Renomear o nó
+
+**Network → Rename this node…** (ou duplo-clique no nome no topo) muda o `Alias`
+do Radmin — o nome que os outros peers veem. Persiste no registro e reinicia o
+serviço para re-anunciar à mesh. Validado: muda e não reverte após reconexão.
