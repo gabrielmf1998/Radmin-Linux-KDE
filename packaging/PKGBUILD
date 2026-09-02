@@ -1,0 +1,25 @@
+# Maintainer: gabrielmf1998
+pkgname=radmin-linux
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Run Radmin VPN (Windows-only) on Linux via a headless VM"
+arch=('any')
+url="https://github.com/gabrielmf1998/radmin-linux"
+license=('MIT')
+depends=('qemu-desktop' 'dnsmasq' 'networkmanager' 'socat' 'python>=3.11')
+optdepends=('tigervnc: VM console for first-time network setup')
+source=()
+package() {
+  cd "$srcdir/.."
+  install -d "$pkgdir/usr/share/radmin-linux"
+  cp -r app shim agent "$pkgdir/usr/share/radmin-linux/"
+  install -m644 env.sh "$pkgdir/usr/share/radmin-linux/"
+  install -m755 preflight.sh radmin-linux.sh deploy-shim.sh deploy-agent.sh \
+    install.sh build-vm.sh "$pkgdir/usr/share/radmin-linux/"
+  install -Dm755 /dev/stdin "$pkgdir/usr/bin/radmin-linux" <<'EOF'
+#!/bin/sh
+exec /usr/share/radmin-linux/radmin-linux.sh "$@"
+EOF
+  install -Dm644 packaging/radmin-linux.desktop \
+    "$pkgdir/usr/share/applications/radmin-linux.desktop"
+}

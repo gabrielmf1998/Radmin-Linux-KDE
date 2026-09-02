@@ -131,3 +131,27 @@ confiável) e os nomes (best-effort, correlação na memória).
 **Network → Rename this node…** (ou duplo-clique no nome no topo) muda o `Alias`
 do Radmin — o nome que os outros peers veem. Persiste no registro e reinicia o
 serviço para re-anunciar à mesh. Validado: muda e não reverte após reconexão.
+
+## Instalação e distribuição (tudo automatizado)
+
+| ferramenta | o que faz |
+|---|---|
+| `install.sh [IMG]` | monta a pilha num alvo limpo: KVM, deps, venv, código, importa a VM, cria tap+DHCP, escreve o config, cria o atalho |
+| `build-vm.sh --clean` | sai da rede atual, zera identidade, apaga logs, compacta → imagem-base distribuível |
+| `packaging/build-rpm.sh` | gera o RPM (`radmin-linux-*.noarch.rpm`) |
+| `packaging/PKGBUILD` | pacote Arch (`makepkg`) |
+
+O pacote leva só o código (leve); a imagem da VM (~2-3 GB compactada) é fornecida
+à parte por ser grande e carregar estado.
+
+## Config central
+
+Tudo em um lugar: `app/config.py` (Python) e `env.sh` (shell) leem, em ordem,
+variáveis de ambiente → `~/.config/radmin-linux/config.env` → defaults. Zero
+caminhos hardcoded — o `install.sh` escreve o `config.env` do alvo.
+
+## Tudo pela bandeja
+
+O ícone na bandeja controla tudo — ligar/desligar a VM, conectar/desconectar,
+diagnóstico com reparo, atualizar, sincronizar membros — e o tooltip reflete o
+estado. **O usuário nunca abre a VM.** Um watchdog reinicia a VM se ela travar.

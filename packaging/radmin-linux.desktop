@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Radmin VPN
+Comment=Radmin VPN on Linux (headless VM)
+Exec=radmin-linux
+Icon=network-vpn
+Terminal=false
+Categories=Network;
