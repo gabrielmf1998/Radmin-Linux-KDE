@@ -55,10 +55,26 @@ class Roster:
         return self.entries.get(ip, {}).get("name", "")
 
     def all_ips(self) -> list[str]:
-        return list(self.entries.keys())
+        # ignora chaves internas (ex: __networks__)
+        return [k for k in self.entries.keys() if not k.startswith("__")]
 
     def forget(self, ip: str) -> None:
         self.entries.pop(ip, None)
+        self.save()
+
+    # ---- apelidos de rede (multiplas redes) ----
+    def net_label(self, guid: str) -> str:
+        """Apelido da rede, ou um GUID curto se nao houver."""
+        nets = self.entries.get("__networks__", {})
+        name = nets.get(guid, "")
+        if name:
+            return name
+        g = guid.strip("{}")
+        return "Network " + g[:8]
+
+    def set_net_label(self, guid: str, name: str) -> None:
+        nets = self.entries.setdefault("__networks__", {})
+        nets[guid] = name
         self.save()
 
     def ingest(self, discovered: dict) -> int:

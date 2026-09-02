@@ -18,4 +18,8 @@ PY
   fi
   exit 1
 fi
-exec "$VENV/bin/python" "$SELF/app/main.py" "$@"
+# roda com prioridade de I/O baixa: mesmo o dump pesado (~200MB) nunca trava o
+# desktop. nice/ionice se disponiveis; senao roda normal.
+NICE=""; command -v nice >/dev/null && NICE="nice -n 5"
+IONICE=""; command -v ionice >/dev/null && IONICE="ionice -c2 -n6"
+exec $NICE $IONICE "$VENV/bin/python" "$SELF/app/main.py" "$@"

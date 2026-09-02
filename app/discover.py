@@ -90,8 +90,31 @@ def _extract(dump_path: str) -> dict[str, str]:
     return ips
 
 
-def discover_peers(scratch: str = "/tmp/radmin-gui.dmp") -> dict[str, str]:
-    """Lista completa {ip: nome} da rede. {} se falhar."""
+def _scratch_dir() -> str:
+    """Diretorio para o dump (~200MB). NUNCA em tmpfs (RAM) - usa um disco real.
+    Prefere o cache do usuario; cai para /var/tmp; recusa tmpfs."""
+    import shutil
+    candidates = [
+        os.path.join(os.environ.get("XDG_CACHE_HOME", os.path.expanduser("~/.cache")), "radmin-linux"),
+        "/var/tmp/radmin-linux",
+    ]
+    for d in candidates:
+        try:
+            os.makedirs(d, exist_ok=True)
+            # /var/tmp e ~/.cache normalmente sao disco real; tmpfs seria RAM
+            st = os.statvfs(d)
+            if st.f_blocks * st.f_frsize > 300 * 1024 * 1024:  # tem espaco
+                return d
+        except OSError:
+            continue
+    return candidates[-1]
+
+
+def discover_peers(scratch: str | None = None) -> dict[str, str]:
+    """Lista completa {ip: nome} da rede. {} se falhar. O dump vai para disco
+    real (nunca tmpfs), com prioridade de I/O baixa para nao travar o desktop."""
+    if scratch is None:
+        scratch = os.path.join(_scratch_dir(), "radmin-gui.dmp")
     if not _make_dump_on_vm():
         return {}
     if not _download_dump(scratch):

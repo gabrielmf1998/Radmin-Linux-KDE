@@ -50,6 +50,11 @@ QScrollArea { border: none; background: #1a1d20; }
 .peer { background: #1a1d20; }
 .peerName { font-size: 13px; color: #e2e6e9; }
 .peerIp   { font-size: 12px; color: #8a99a2; }
+#netbar { background: #182028; border-bottom: 1px solid #10151a; }
+.netchip { background: #22323d; color: #cfe6ef; border-radius: 9px;
+           padding: 2px 10px; font-size: 11px; }
+.netchipSel { background: #2f6f8c; color: #ffffff; border-radius: 9px;
+              padding: 2px 10px; font-size: 11px; font-weight: 600; }
 #status { background: #12262f; color: #7f8c93; font-size: 11px; padding: 3px 8px; }
 QScrollBar:vertical { background: #16191c; width: 10px; margin: 0; }
 QScrollBar::handle:vertical { background: #3a444b; border-radius: 5px; min-height: 24px; }
@@ -109,6 +114,24 @@ class DiscoverWorker(QThread):
         self.done.emit(discover.discover_peers())
 
 
+class NetChip(QLabel):
+    """Chip de uma rede: clique filtra, duplo-clique renomeia."""
+    def __init__(self, guid, label, selected, on_click, on_rename):
+        super().__init__(label)
+        self.guid = guid
+        self.setProperty("class", "netchipSel" if selected else "netchip")
+        self.setCursor(QCursor(Qt.PointingHandCursor))
+        self.setToolTip(guid + "  (duplo-clique para renomear)")
+        self._on_click = on_click
+        self._on_rename = on_rename
+
+    def mousePressEvent(self, e):
+        self._on_click(self.guid)
+
+    def mouseDoubleClickEvent(self, e):
+        self._on_rename(self.guid)
+
+
 class PeerRow(QFrame):
     def __init__(self, ip, name, online, on_rename):
         super().__init__()
@@ -164,6 +187,8 @@ class MainWindow(QMainWindow):
         self._last_service = "Unknown"
         self._vm_running = False
         self._node_ip = ""
+        self._networks = []       # GUIDs das redes que o no participa
+        self._selected_net = None  # rede selecionada no filtro (None = todas)
         self._build()
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.refresh)
@@ -178,11 +203,9 @@ class MainWindow(QMainWindow):
         self.healthtimer.timeout.connect(self.health_now)
         self.healthtimer.start(HEALTH_MS)
         self.refresh()
-        # descobre a lista completa de peers logo apos abrir (uma vez)
-        # descoberta pesada (dump ~200MB) so na 1a vez (roster vazio);
-        # depois o roster ja persiste os membros. Manual via 'Sync members'.
-        if not self.roster.all_ips():
-            QTimer.singleShot(12000, self.discover_now)
+        # descoberta pesada (dump ~200MB) so na 1a vez (roster vazio); disparada
+        # pelo _apply quando a VM e confirmada ligada (nao num timer cego).
+        self._want_discover = not self.roster.all_ips()
 
     # ---------- layout ----------
     def _build(self):
@@ -263,6 +286,14 @@ class MainWindow(QMainWindow):
         box.addWidget(self.nodeName); box.addWidget(self.nodeIp); box.addLayout(rowb)
         cl.addLayout(box, 1)
         v.addWidget(card)
+
+        # barra de redes (multiplas redes): mostra as redes que o no participa.
+        # Clicar filtra por rede; duplo-clique renomeia. Escondida se 0/1 rede.
+        self.netbar = QWidget(); self.netbar.setObjectName("netbar")
+        self.netbarLay = QHBoxLayout(self.netbar)
+        self.netbarLay.setContentsMargins(8, 4, 8, 4); self.netbarLay.setSpacing(6)
+        self.netbar.hide()
+        v.addWidget(self.netbar)
 
         # lista de peers
         self.scroll = QScrollArea(); self.scroll.setWidgetResizable(True)
@@ -375,10 +406,19 @@ class MainWindow(QMainWindow):
             self.roster.seen(p.ip, p.mac, p.host)
         self.roster.save()
 
+        # barra de redes (multiplas redes)
+        self._networks = list(st.networks)
+        self._update_netbar()
+
         # liveness inicial = ARP; o ping_sweep refina logo em seguida
         active = {p.ip for p in st.peers if p.ip != "26.0.0.1"}
         self._render_peers(active)
         self.ping_now()   # dispara liveness ativo
+
+        # 1a descoberta so agora, com a VM confirmada ligada e o servico no ar
+        if getattr(self, "_want_discover", False) and on:
+            self._want_discover = False
+            QTimer.singleShot(3000, self.discover_now)
 
     def _render_peers(self, online_set):
         rows = []
@@ -391,6 +431,47 @@ class MainWindow(QMainWindow):
         nact = sum(1 for _, o in rows if o)
         node = self.nodeIp.text()
         self.status.setText(f"● {nact} online · {len(rows)} known · node {node}")
+
+    # ---------- barra de redes (multiplas redes) ----------
+    def _update_netbar(self):
+        # limpa
+        while self.netbarLay.count():
+            it = self.netbarLay.takeAt(0)
+            if it.widget():
+                it.widget().deleteLater()
+        nets = self._networks
+        if len(nets) <= 1:
+            self.netbar.hide()   # 0 ou 1 rede: barra desnecessaria
+            self._selected_net = None
+            return
+        # chip "All" + um chip por rede
+        allsel = (self._selected_net is None)
+        chip = NetChip("*", f"All ({len(nets)})", allsel,
+                       self._select_net, lambda g: None)
+        self.netbarLay.addWidget(chip)
+        for g in nets:
+            c = NetChip(g, self.roster.net_label(g), self._selected_net == g,
+                        self._select_net, self._rename_net)
+            self.netbarLay.addWidget(c)
+        self.netbarLay.addStretch(1)
+        self.netbar.show()
+
+    def _select_net(self, guid):
+        self._selected_net = None if guid == "*" else guid
+        self._update_netbar()
+        # nota: filtrar peers por rede exige a associacao peer->rede, que so o
+        # protocolo Radmin tem. Por ora o chip destaca a rede; a lista permanece
+        # unificada (o Radmin roteia tudo junto na 26.0.0.0/8).
+        self.status.setText("● network: " + ("all" if self._selected_net is None
+                            else self.roster.net_label(self._selected_net)))
+
+    def _rename_net(self, guid):
+        cur = self.roster.net_label(guid)
+        text, ok = QInputDialog.getText(self, "Rename network",
+                                        "Name for this network:", text=cur)
+        if ok and text.strip():
+            self.roster.set_net_label(guid, text.strip())
+            self._update_netbar()
 
     def _relayout(self, rows):
         # limpa
