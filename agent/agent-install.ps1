@@ -18,6 +18,9 @@ schtasks /create /tn "RadminAgent-Net" /tr "powershell -ExecutionPolicy Bypass -
 # tarefa: orquestrador tambem ao logon do bench (redundancia, caso ICS precise da sessao)
 schtasks /create /tn "RadminAgent-Net-Logon" /tr "powershell -ExecutionPolicy Bypass -WindowStyle Hidden -File $dir\net-orchestrator.ps1" /sc onlogon /ru bench /rp bench /it /f | Out-Null
 
+# tarefa: health + auto-heal a cada 5 min (redundancia caso a UI esteja fechada)
+schtasks /create /tn "RadminAgent-Health" /tr "powershell -ExecutionPolicy Bypass -WindowStyle Hidden -File $dir\health.ps1 -Heal" /sc minute /mo 5 /ru SYSTEM /rl HIGHEST /f | Out-Null
+
 Write-Output "<<<AGENTOK>>>"
 schtasks /query /tn "RadminAgent-Power" /fo LIST 2>&1 | Select-String "TaskName|Status" | Out-String
 schtasks /query /tn "RadminAgent-Net" /fo LIST 2>&1 | Select-String "TaskName|Status" | Out-String

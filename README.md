@@ -7,7 +7,8 @@ na VM Windows (bancada `ntlite-bench`). Fase 2: só leitura — nada aqui altera
     ├── agent/          scripts que rodam DENTRO da VM (Windows)
     │   ├── net-orchestrator.ps1  garante ICS no boot (resolve ordem)
     │   ├── power-guard.ps1       VM nunca dorme/hiberna/reinicia
-    │   ├── radmin-update.ps1     checa/instala update do Radmin
+    │   ├── radmin-update.ps1     descobre a última versão na página e instala
+    │   ├── health.ps1            diagnostica e AUTO-REPARA cada componente
     │   └── agent-install.ps1     registra as tarefas no boot
     ├── app/            cliente Linux
     │   ├── main.py     UI Qt (clone) + tray
@@ -71,7 +72,8 @@ O agente roda **sozinho no boot** da VM (tarefas agendadas) e é controlável pe
 |---|---|---|
 | `power-guard.ps1` | boot (SYSTEM) | trava energia: sem sleep/hibernate/monitor-off, WU sem reboot |
 | `net-orchestrator.ps1` | boot +30s, e ao logon | espera o Radmin conectar, garante ICS (Radmin=pública, isolada=privada) |
-| `radmin-update.ps1` | sob demanda | compara versão instalada vs. servidor, instala silencioso |
+| `radmin-update.ps1` | sob demanda | **descobre a última versão raspando a página oficial**, instala silencioso |
+| `health.ps1` | a cada 5 min (SYSTEM) + sob demanda | diagnostica 6 componentes e **conserta sozinho** o que estiver quebrado |
 
 Instalar/reparar: `./deploy-agent.sh` + menu **System → Instalar/reparar agente**.
 
@@ -83,3 +85,29 @@ Para o usuário, **Radmin VPN (Linux) é a VM**. O botão power:
 
 Validado: desligar pela UI → religar pela UI → o agente reconfigura tudo no boot e
 o `RvControlSvc` volta Running sozinho. **Com ICS não há o deadlock da bridge L2.**
+
+## Auto-heal — o portal nunca precisa que você olhe a VM
+
+`health.ps1` checa e **repara** 6 componentes, devolvendo um relatório JSON:
+
+| componente | conserta como |
+|---|---|
+| Serviço Radmin | reinicia o RvControlSvc |
+| IP na mesh (26.x) | (diagnóstico) |
+| Compartilhamento (ICS) | reaplica Radmin=pública / isolada=privada |
+| Ponte com o Linux (192.168.137.1) | (diagnóstico) |
+| Energia travada | `powercfg -h off` + timeouts zerados |
+| Agente no boot | (diagnóstico) |
+
+**Dupla redundância:**
+- a UI roda `health -Heal` a cada 2 min em background (auto-heal silencioso)
+- a VM roda `health -Heal` a cada 5 min (tarefa SYSTEM) mesmo com a UI fechada
+
+Validado: parar o serviço → o portal detecta e religa sozinho (`healed: true`),
+sem tocar na VM. Menu **System → Diagnóstico completo** mostra o relatório visual.
+
+## Descoberta automática de versão
+
+`radmin-update.ps1` baixa a página oficial na própria VM, extrai o maior
+`Radmin_VPN_<versão>.exe`, compara com o `RvRvpnGui.exe` instalado e instala se novo.
+Quando a Famatech publicar uma versão nova, o portal detecta sem nenhuma URL fixa.

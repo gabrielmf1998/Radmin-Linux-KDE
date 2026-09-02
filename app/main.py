@@ -22,8 +22,9 @@ import vmctl
 import icons
 from roster import Roster
 
-POLL_MS = 30000   # refresh completo (shim) a cada 30s
-PING_MS = 30000   # liveness (ping sweep) a cada 30s
+POLL_MS = 30000    # refresh completo (shim) a cada 30s
+PING_MS = 30000    # liveness (ping sweep) a cada 30s
+HEALTH_MS = 120000 # diagnostico + auto-heal a cada 2 min
 
 QSS = """
 * { color: #d9dde0; font-family: 'Segoe UI','Noto Sans',sans-serif; }
@@ -87,6 +88,18 @@ class ActionWorker(QThread):
         self.done.emit(ok, log)
 
 
+class HealthWorker(QThread):
+    """Diagnostico + auto-heal em background."""
+    done = Signal(object)
+
+    def __init__(self, heal):
+        super().__init__()
+        self.heal = heal
+
+    def run(self):
+        self.done.emit(agent.health(heal=self.heal))
+
+
 class PeerRow(QFrame):
     def __init__(self, ip, name, online, on_rename):
         super().__init__()
@@ -148,6 +161,11 @@ class MainWindow(QMainWindow):
         self.pingtimer = QTimer(self)
         self.pingtimer.timeout.connect(self.ping_now)
         self.pingtimer.start(PING_MS)
+        self._health = None
+        self._last_health = None
+        self.healthtimer = QTimer(self)
+        self.healthtimer.timeout.connect(self.health_now)
+        self.healthtimer.start(HEALTH_MS)
         self.refresh()
 
     # ---------- layout ----------
@@ -168,6 +186,8 @@ class MainWindow(QMainWindow):
                 self.actVmOff = QAction("Desligar a VM", self)
                 self.actVmOff.triggered.connect(self.do_vm_off); m.addAction(self.actVmOff)
                 m.addSeparator()
+                ah = QAction("Diagnóstico completo (auto-reparar)", self)
+                ah.triggered.connect(self.do_health); m.addAction(ah)
                 au = QAction("Verificar atualização do Radmin…", self)
                 au.triggered.connect(self.do_check_update); m.addAction(au)
                 ao = QAction("Reparar rede (orquestrador)", self)
@@ -350,6 +370,71 @@ class MainWindow(QMainWindow):
             return
         online = {ip for ip, up in result.items() if up}
         self._render_peers(online)
+
+    # ---------- health / auto-heal (silencioso, em background) ----------
+    def health_now(self):
+        if self._closing or self._busy:
+            return
+        if not self._vm_running:
+            return
+        if self._health and self._health.isRunning():
+            return
+        self._health = HealthWorker(heal=True)   # sempre cura no ciclo automatico
+        self._health.done.connect(self._apply_health)
+        self._health.start()
+
+    def _apply_health(self, res: dict):
+        if self._closing:
+            return
+        self._last_health = res
+        if res.get("error"):
+            return
+        # se algo foi curado, avisa discretamente na barra
+        if res.get("healed"):
+            healed = [c["name"] for c in res.get("checks", []) if c.get("healed")]
+            self.status.setText("● auto-reparado: " + ", ".join(healed))
+            QTimer.singleShot(1000, self.refresh)
+
+    def do_health(self):
+        # diagnostico manual com relatorio visivel
+        if self._busy:
+            return
+        self._busy = True
+        self.status.setText("● diagnóstico completo…")
+        self._sync_actions(self._last_service == "Running")
+        self._health = HealthWorker(heal=True)
+        self._health.done.connect(self._health_report)
+        self._health.start()
+
+    def _health_report(self, res: dict):
+        from PySide6.QtWidgets import QMessageBox
+        self._busy = False
+        self._sync_actions(self._last_service == "Running")
+        if res.get("error"):
+            QMessageBox.warning(self, "Diagnóstico", f"Erro: {res['error']}")
+            return
+        nomes = {
+            "radmin_service": "Serviço Radmin",
+            "mesh_ip": "IP na mesh (26.x)",
+            "ics": "Compartilhamento (ICS)",
+            "isolated_ip": "Ponte com o Linux",
+            "power_guard": "Energia travada",
+            "agent_tasks": "Agente no boot",
+        }
+        linhas = []
+        for c in res.get("checks", []):
+            mark = "✓" if c.get("ok") else "✗"
+            extra = "  (reparado)" if c.get("healed") else ""
+            linhas.append(f"{mark}  {nomes.get(c['name'], c['name'])}{extra}")
+        titulo = "Tudo funcionando" if res.get("all_ok") else "Há problemas"
+        m = QMessageBox(self)
+        m.setWindowTitle("Diagnóstico da VM")
+        m.setIcon(QMessageBox.Information if res.get("all_ok") else QMessageBox.Warning)
+        m.setText(titulo + (" — reparado automaticamente" if res.get("healed") else ""))
+        m.setInformativeText("\n".join(linhas))
+        m.exec()
+        self.status.setText("● diagnóstico: " + ("tudo ok" if res.get("all_ok") else "ver detalhes"))
+        self.refresh()
 
     # ---------- acoes (fase 3/4) ----------
     def _sync_actions(self, on: bool):

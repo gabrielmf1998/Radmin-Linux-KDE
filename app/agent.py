@@ -8,6 +8,7 @@ import backend
 
 AGENT_DIR = r"C:\radmin-agent"
 _UPD_RE = re.compile(r"<<<UPD>>>\s*(.*?)\s*<<<END>>>", re.S)
+_HEALTH_RE = re.compile(r"<<<HEALTH>>>\s*(.*?)\s*<<<END>>>", re.S)
 
 
 def _run_file(ps_path: str, timeout: int = 90) -> str:
@@ -52,6 +53,27 @@ def check_update(install: bool = False, timeout: int = 300) -> dict:
         return json.loads(re.sub(r"\s+", "", m.group(1)))
     except json.JSONDecodeError as e:
         return {"error": f"json: {e}"}
+
+
+def health(heal: bool = False, timeout: int = 120) -> dict:
+    """Diagnostico (e auto-reparo se heal=True) completo da VM. Devolve dict."""
+    flag = "-Heal" if heal else ""
+    cmd = (
+        f"{backend.WMIEXEC} -shell-type powershell {backend.TARGET} "
+        f'"powershell -ExecutionPolicy Bypass -File {AGENT_DIR}\\health.ps1 {flag}"'
+    )
+    try:
+        out = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
+        blob = out.stdout + out.stderr
+    except Exception as e:  # noqa
+        return {"error": str(e), "all_ok": False, "checks": []}
+    m = _HEALTH_RE.search(blob)
+    if not m:
+        return {"error": "sem resposta do health", "all_ok": False, "checks": []}
+    try:
+        return json.loads(re.sub(r"\s+", "", m.group(1)))
+    except json.JSONDecodeError as e:
+        return {"error": f"json: {e}", "all_ok": False, "checks": []}
 
 
 def agent_installed(timeout: int = 40) -> bool:
