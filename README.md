@@ -1,7 +1,35 @@
-# Radmin VPN (Linux) — clone funcional
+# Radmin VPN (Linux) — unofficial
 
-UI PySide6 que **imita a janela do Radmin VPN** mas lê o Radmin **real** rodando
-na VM Windows (bancada `ntlite-bench`). Fase 2: só leitura — nada aqui altera o Radmin.
+Rodar um app **Windows-only** (Radmin VPN) no Linux, com cara de nativo, sem o
+usuário nunca ver o Windows. Uma UI Qt controla o Radmin **real** rodando dentro
+de uma VM Windows 7 headless. Veja `IDEA.md` para o conceito e as seções abaixo
+para a arquitetura por componente.
+
+## Status (onde paramos)
+
+**Funciona ponta a ponta.** Do zero ao uso:
+
+- ✅ **UI** (`app/`): ligar/desligar a VM, conectar/desconectar, ver peers
+  (online e offline), renomear o nó, **barra de múltiplas redes**, tray com
+  controle total, ícone no menu.
+- ✅ **Agente na VM** (`agent/`): auto-configura ICS no boot, auto-heal, auto-update.
+- ✅ **Instalação**: `install.sh` (multi-distro), `bootstrap.sh` (curl | bash),
+  pacotes RPM + Arch em `packaging/`.
+- ✅ **Build da imagem**: `build-vm.sh --from-scratch WIN.iso` (do Windows cru até
+  a VM pronta, 100% automático, validado) ou `--clean` (a partir de uma VM que já
+  funciona). Imagem-base em `dist/` (não versionada, ~3 GB).
+- ✅ **Estabilidade**: abrir o app **não** liga a VM nem congela a máquina (o
+  launcher usa `preflight.sh --light`); o app roda com prioridade de I/O baixa.
+
+**Falta / próximos passos:**
+- Ligar a VM pelo power ainda custa ~1-2 min de boot do Windows (com prioridade
+  baixa; sem congelar). Dá pra suavizar (aviso "ligando…", menos vCPU no boot).
+- Filtrar peers **por rede** de verdade e mostrar o **nome real** das redes exigem
+  decifrar o protocolo LPC `RadminVpnGuiChannel` (hoje: chip destaca a rede; nomes
+  são apelidos locais).
+
+> Nota histórica: começou como clone só-leitura (fase 2) e cresceu para controle
+> total + provisionamento automático. As menções a "fase 2" abaixo são desse início.
 
     radmin-linux/
     ├── agent/          scripts que rodam DENTRO da VM (Windows)
