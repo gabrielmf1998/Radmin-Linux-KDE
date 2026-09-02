@@ -27,6 +27,7 @@ class Peer:
 @dataclass
 class State:
     ok: bool = False
+    vm_running: bool = False
     node_ip: str = ""
     hostname: str = ""
     alias: str = ""
@@ -53,12 +54,19 @@ def _run_shim(timeout: int = 40) -> str:
 
 
 def fetch_state(timeout: int = 40) -> State:
+    # checa a VM antes de gastar o timeout do WMI
+    try:
+        import vmctl
+        if not vmctl.is_running():
+            return State(ok=False, vm_running=False, error="VM desligada")
+    except Exception:  # noqa
+        pass
     try:
         raw = _run_shim(timeout=timeout)
     except subprocess.TimeoutExpired:
-        return State(ok=False, error="timeout ao falar com a VM")
+        return State(ok=False, vm_running=True, error="timeout ao falar com a VM")
     except Exception as e:  # noqa
-        return State(ok=False, error=f"transporte: {e}")
+        return State(ok=False, vm_running=True, error=f"transporte: {e}")
 
     m = _MARK_RE.search(raw)
     if not m:
@@ -77,6 +85,7 @@ def fetch_state(timeout: int = 40) -> State:
 
     st = State(
         ok=bool(d.get("ok")),
+        vm_running=True,
         node_ip=d.get("node_ip") or "",
         hostname=d.get("hostname") or "",
         alias=d.get("alias") or "",

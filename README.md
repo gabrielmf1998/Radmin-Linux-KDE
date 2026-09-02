@@ -4,15 +4,23 @@ UI PySide6 que **imita a janela do Radmin VPN** mas lê o Radmin **real** rodand
 na VM Windows (bancada `ntlite-bench`). Fase 2: só leitura — nada aqui altera o Radmin.
 
     radmin-linux/
+    ├── agent/          scripts que rodam DENTRO da VM (Windows)
+    │   ├── net-orchestrator.ps1  garante ICS no boot (resolve ordem)
+    │   ├── power-guard.ps1       VM nunca dorme/hiberna/reinicia
+    │   ├── radmin-update.ps1     checa/instala update do Radmin
+    │   └── agent-install.ps1     registra as tarefas no boot
     ├── app/            cliente Linux
     │   ├── main.py     UI Qt (clone) + tray
     │   ├── backend.py  transporte: chama a shim via WMI e parseia o JSON
     │   ├── roster.py   lista persistente de peers (offline + apelidos locais)
+    │   ├── vmctl.py    liga/desliga a VM inteira (monitor QEMU + preflight)
+    │   ├── agent.py    dispara os scripts do agente e lê updates
     │   └── icons.py    logo/sinal/power desenhados em QPainter
     ├── shim/
     │   └── radmin-shim.ps1   roda na VM, devolve JSON do estado do Radmin
-    ├── radmin-linux.sh   abre a UI
-    └── deploy-shim.sh    (re)envia a shim para C:\ na VM
+    ├── radmin-linux.sh   abre a UI (auto-repara a pilha antes)
+    ├── deploy-shim.sh    (re)envia a shim para C:\ na VM
+    └── deploy-agent.sh   (re)envia o agente para C:\radmin-agent na VM
 
 ## Como funciona
 
@@ -54,3 +62,24 @@ perdido o carrier (device tun recriado com a VM viva) ele **reinicia a VM** sozi
 
     RADMIN_TARGET=bench:bench@192.168.137.1   # alvo WMI
     RADMIN_SHIM='C:\radmin-shim.ps1'          # caminho da shim na VM
+
+## Automação (agente na VM)
+
+O agente roda **sozinho no boot** da VM (tarefas agendadas) e é controlável pela UI:
+
+| script | quando | o que faz |
+|---|---|---|
+| `power-guard.ps1` | boot (SYSTEM) | trava energia: sem sleep/hibernate/monitor-off, WU sem reboot |
+| `net-orchestrator.ps1` | boot +30s, e ao logon | espera o Radmin conectar, garante ICS (Radmin=pública, isolada=privada) |
+| `radmin-update.ps1` | sob demanda | compara versão instalada vs. servidor, instala silencioso |
+
+Instalar/reparar: `./deploy-agent.sh` + menu **System → Instalar/reparar agente**.
+
+## O power da UI = a VM inteira
+
+Para o usuário, **Radmin VPN (Linux) é a VM**. O botão power:
+- VM ligada → desliga a VM (ACPI limpo via monitor QEMU)
+- VM desligada → liga a VM (via preflight, que auto-repara a pilha)
+
+Validado: desligar pela UI → religar pela UI → o agente reconfigura tudo no boot e
+o `RvControlSvc` volta Running sozinho. **Com ICS não há o deadlock da bridge L2.**

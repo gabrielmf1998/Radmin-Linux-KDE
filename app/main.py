@@ -17,6 +17,8 @@ from PySide6.QtCore import Qt, QThread, Signal, QTimer
 sys.path.insert(0, os.path.dirname(__file__))
 import backend
 import actions
+import agent
+import vmctl
 import icons
 from roster import Roster
 
@@ -138,6 +140,7 @@ class MainWindow(QMainWindow):
         self._busy = False
         self._closing = False
         self._last_service = "Unknown"
+        self._vm_running = False
         self._build()
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.refresh)
@@ -159,6 +162,18 @@ class MainWindow(QMainWindow):
             m = QMenu(name, mb)
             if name == "System":
                 a = QAction("Atualizar agora", self); a.triggered.connect(self.refresh); m.addAction(a)
+                m.addSeparator()
+                self.actVmOn = QAction("Ligar a VM", self)
+                self.actVmOn.triggered.connect(self.do_vm_on); m.addAction(self.actVmOn)
+                self.actVmOff = QAction("Desligar a VM", self)
+                self.actVmOff.triggered.connect(self.do_vm_off); m.addAction(self.actVmOff)
+                m.addSeparator()
+                au = QAction("Verificar atualização do Radmin…", self)
+                au.triggered.connect(self.do_check_update); m.addAction(au)
+                ao = QAction("Reparar rede (orquestrador)", self)
+                ao.triggered.connect(self.do_orchestrate); m.addAction(ao)
+                ai = QAction("Instalar/reparar agente na VM", self)
+                ai.triggered.connect(self.do_install_agent); m.addAction(ai)
                 m.addSeparator()
                 q = QAction("Sair", self); q.triggered.connect(QApplication.quit); m.addAction(q)
             elif name == "Network":
@@ -247,11 +262,20 @@ class MainWindow(QMainWindow):
     def _apply(self, st: backend.State):
         if self._closing:
             return
+        self._vm_running = st.vm_running
         if not st.ok:
+            self._last_service = "Stopped"
             self.status.setText(f"● {st.error}")
-            self.badge.setText("Offline"); self.badge.setObjectName("badgeOff")
+            if not st.vm_running:
+                self.nodeName.setText("VM desligada")
+                self.nodeIp.setText("clique no power para ligar")
+                self.badge.setText("Desligado")
+            else:
+                self.badge.setText("Offline")
+            self.badge.setObjectName("badgeOff")
             self.badge.setStyleSheet(QSS)
             self.power.setPixmap(icons.power_pixmap(False, 48))
+            self._sync_actions(False)
             self._relayout([])
             return
 
@@ -329,10 +353,14 @@ class MainWindow(QMainWindow):
 
     # ---------- acoes (fase 3/4) ----------
     def _sync_actions(self, on: bool):
+        vm = self._vm_running
         if hasattr(self, "actConnect"):
-            self.actConnect.setEnabled(not on and not self._busy)
-            self.actDisconnect.setEnabled(on and not self._busy)
-            self.actLeave.setEnabled(not self._busy)
+            self.actConnect.setEnabled(vm and not on and not self._busy)
+            self.actDisconnect.setEnabled(vm and on and not self._busy)
+            self.actLeave.setEnabled(vm and not self._busy)
+        if hasattr(self, "actVmOn"):
+            self.actVmOn.setEnabled(not vm and not self._busy)
+            self.actVmOff.setEnabled(vm and not self._busy)
 
     def _run_action(self, fn, label):
         if self._busy:
@@ -355,12 +383,98 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(1500, self.refresh)
 
     def toggle_power(self):
+        # o power da UI liga/desliga a VM INTEIRA (Radmin Linux = a VM)
         if self._busy:
             return
-        if self._last_service == "Running":
-            self.do_disconnect()
+        if self._vm_running:
+            self.do_vm_off()
         else:
-            self.do_connect()
+            self.do_vm_on()
+
+    # ---------- controle da VM inteira ----------
+    def do_vm_on(self):
+        if self._busy or self._vm_running:
+            return
+        self._busy = True
+        self.status.setText("● ligando a VM…")
+        self.nodeName.setText("iniciando…")
+        self._sync_actions(False)
+        self._action = ActionWorker(lambda: (vmctl.power_on(), "ligada"))
+        self._action.done.connect(lambda ok, log: self._vm_action_done("Ligando"))
+        self._action.start()
+
+    def do_vm_off(self):
+        from PySide6.QtWidgets import QMessageBox
+        if self._busy or not self._vm_running:
+            return
+        r = QMessageBox.question(self, "Desligar Radmin VPN",
+            "Isso desliga a VM por completo.\nO Radmin e todos os peers ficarão indisponíveis até religar.\n\nDesligar?")
+        if r != QMessageBox.Yes:
+            return
+        self._busy = True
+        self.status.setText("● desligando a VM…")
+        self._sync_actions(True)
+        self._action = ActionWorker(lambda: (vmctl.power_off(), "desligada"))
+        self._action.done.connect(lambda ok, log: self._vm_action_done("Desligando"))
+        self._action.start()
+
+    def _vm_action_done(self, label):
+        if self._closing:
+            return
+        self._busy = False
+        self.status.setText(f"● {label}: ok")
+        self._sync_actions(False)
+        # ligar demora ~90s p/ o WMI responder; o refresh normal (30s) recupera,
+        # mas dispara um cedo p/ atualizar o estado da VM (on/off)
+        QTimer.singleShot(4000, self.refresh)
+
+    # ---------- agente / automacao ----------
+    def do_check_update(self):
+        if self._busy:
+            return
+        self._busy = True
+        self.status.setText("● verificando atualização…")
+        self._sync_actions(self._last_service == "Running")
+        self._action = ActionWorker(lambda: (agent.check_update(install=False), ""))
+        self._action.done.connect(self._update_checked)
+        self._action.start()
+
+    def _update_checked(self, res, _log):
+        from PySide6.QtWidgets import QMessageBox
+        self._busy = False
+        self._sync_actions(self._last_service == "Running")
+        if isinstance(res, tuple):
+            res = res[0]
+        if not isinstance(res, dict) or res.get("error"):
+            self.status.setText("● update: erro")
+            QMessageBox.warning(self, "Atualização", f"Não consegui verificar:\n{res}")
+            return
+        cur = res.get("installed_version", "?")
+        lat = res.get("latest_version", "?")
+        if res.get("has_update"):
+            r = QMessageBox.question(self, "Atualização disponível",
+                f"Instalada: {cur}\nDisponível: {lat}\n\nInstalar agora na VM?")
+            if r == QMessageBox.Yes:
+                self._run_action(lambda: (agent.check_update(install=True).get("did_install", False), ""),
+                                 "Atualizando Radmin")
+            else:
+                self.status.setText(f"● {cur} (há {lat})")
+        else:
+            self.status.setText(f"● Radmin atualizado ({cur})")
+            QMessageBox.information(self, "Atualização", f"Já está na versão mais recente ({cur}).")
+
+    def do_orchestrate(self):
+        self._run_action(lambda: agent.orchestrate_net(), "Reparando rede")
+
+    def do_install_agent(self):
+        from PySide6.QtWidgets import QMessageBox
+        def _go():
+            import subprocess, os
+            deploy = os.path.join(os.path.dirname(os.path.dirname(__file__)), "deploy-agent.sh")
+            subprocess.run(["bash", deploy], capture_output=True, timeout=120)
+            out = agent._run_file(r"C:\radmin-agent\agent-install.ps1", 90)
+            return ("<<<AGENTOK>>>" in out), out
+        self._run_action(_go, "Instalando agente")
 
     def do_connect(self):
         self._run_action(actions.connect, "Conectando")
