@@ -72,9 +72,70 @@ case "$MODE" in
     say "Pronta para distribuir. Instale com: ./install.sh $OUT.zst"
     ;;
   --from-scratch)
-    die "modo --from-scratch ainda nao implementado neste script.
-    Requer as ISOs (POSReady7) e reproduz: install desatendido -> Radmin ->
-    ICS -> agente. Por ora use --clean sobre a imagem atual."
+    # provisiona a VM do ZERO: POSReady7 desatendido -> Radmin -> ICS -> agente.
+    WINISO="${1:-${RADMIN_WIN_ISO:-}}"
+    [[ -f "$WINISO" ]] || die "passe a ISO do Windows: ./build-vm.sh --from-scratch POSReady7.iso"
+    command -v qemu-img >/dev/null || die "qemu-img ausente"
+    command -v xorriso  >/dev/null || die "xorriso ausente (instale xorriso)"
+    for t in mkfs.vfat mcopy; do command -v $t >/dev/null || die "$t ausente (instale mtools/dosfstools)"; done
+
+    BDIR="${RADMIN_BUILD:-$SELF/build}"; rm -rf "$BDIR"; mkdir -p "$BDIR/media/agent"
+    say "1/6  Baixando o Radmin VPN (na midia de provisionamento)"
+    RURL="https://download.radmin-vpn.com/download/files/Radmin_VPN_2.0.4899.9.exe"
+    curl -fsSL "$RURL" -o "$BDIR/media/Radmin_VPN.exe" || die "falha ao baixar o Radmin"
+
+    say "2/6  Montando a midia (setup-guest + agente)"
+    cp "$SELF/provision/setup-guest.ps1" "$BDIR/media/"
+    cp "$SELF/agent/"*.ps1 "$BDIR/media/agent/"
+    xorriso -as mkisofs -J -r -V PROVISION -o "$BDIR/provision.iso" "$BDIR/media" 2>/dev/null || die "falha na ISO"
+
+    say "3/6  Floppy de resposta (autounattend)"
+    dd if=/dev/zero of="$BDIR/unattend.img" bs=1024 count=1440 status=none
+    mkfs.vfat -n UNATTEND "$BDIR/unattend.img" >/dev/null
+    MTOOLS_SKIP_CHECK=1 mcopy -i "$BDIR/unattend.img" "$SELF/provision/autounattend.xml" ::autounattend.xml
+
+    say "4/6  Criando o disco (24G esparso)"
+    DISK="$BDIR/bench.qcow2"
+    qemu-img create -f qcow2 "$DISK" 24G >/dev/null
+
+    say "5/6  Instalando + provisionando (headless, ~15 min). Acompanhe: vncviewer 127.0.0.1:5905"
+    # 2 NICs: NAT (internet p/ o Radmin) + a isolada com o MAC que o ICS espera
+    qemu-system-x86_64 -name radmin-build -machine q35,accel=kvm -cpu host -smp 4 -m 4096 \
+      -drive file="$DISK",if=none,id=hd0,format=qcow2,cache=writeback \
+      -device ich9-ahci,id=ahci -device ide-hd,drive=hd0,bus=ahci.0 \
+      -drive file="$WINISO",if=none,id=cd0,media=cdrom,readonly=on -device ide-cd,drive=cd0,bus=ahci.1 \
+      -drive file="$BDIR/provision.iso",if=none,id=cd1,media=cdrom,readonly=on -device ide-cd,drive=cd1,bus=ahci.2 \
+      -drive file="$BDIR/unattend.img",if=floppy,format=raw \
+      -boot order=dc,menu=off -device VGA,vgamem_mb=32 \
+      -netdev user,id=n0 -device e1000e,netdev=n0 \
+      -netdev user,id=n1 -device e1000e,netdev=n1,mac=52:54:00:26:00:02 \
+      -rtc base=localtime -usb -device usb-tablet \
+      -display none -vnc 127.0.0.1:5 \
+      -pidfile "$BDIR/build.pid" -monitor unix:"$BDIR/mon.sock",server,nowait &
+
+    # espera o QEMU criar o pidfile (o & inicia async)
+    for i in $(seq 1 15); do [[ -s "$BDIR/build.pid" ]] && break; sleep 1; done
+    BPID="$(cat "$BDIR/build.pid" 2>/dev/null)"
+    [[ -n "$BPID" ]] && kill -0 "$BPID" 2>/dev/null || die "a VM de build nao subiu (ver VNC 5905)"
+    # o setup-guest desliga a VM ao terminar -> esperamos o processo morrer.
+    say "   aguardando (o convidado se desliga ao concluir; ate ~35 min)…"
+    for i in $(seq 1 105); do   # 105*20s = 35 min
+      sleep 20
+      kill -0 "$BPID" 2>/dev/null || { say "   convidado concluiu e desligou"; break; }
+      [[ $((i % 15)) -eq 0 ]] && say "   ... ainda instalando ($((i*20/60)) min)"
+    done
+
+    say "6/6  Finalizando a imagem"
+    # desliga graciosamente
+    printf 'system_powerdown\n' | timeout 10 socat -,ignoreeof UNIX-CONNECT:"$BDIR/mon.sock" >/dev/null 2>&1
+    for i in $(seq 1 30); do kill -0 "$(cat "$BDIR/build.pid" 2>/dev/null)" 2>/dev/null || break; sleep 2; done
+    kill "$(cat "$BDIR/build.pid" 2>/dev/null)" 2>/dev/null || true
+
+    OUT="${RADMIN_DIST:-$SELF/dist}/radmin-linux-base.qcow2"
+    mkdir -p "$(dirname "$OUT")"
+    qemu-img convert -O qcow2 -c "$DISK" "$OUT" && ok "imagem-base: $OUT ($(du -h "$OUT"|cut -f1))"
+    command -v zstd >/dev/null && zstd -q -19 -f "$OUT" -o "$OUT.zst" && ok "comprimida: $OUT.zst ($(du -h "$OUT.zst"|cut -f1))"
+    say "Instale com: ./install.sh $OUT.zst"
     ;;
   *)
     cat <<USAGE

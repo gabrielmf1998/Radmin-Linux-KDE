@@ -50,19 +50,44 @@ fi
 
 # ---------- 2. dependencias do sistema ----------
 say "2/8  Dependencias do sistema"
+# detecta a familia da distro e mapeia os nomes de pacote (variam muito)
+PM=""; PKG_QEMU=""; PKG_IMG=""; PKG_DNS=""; PKG_NM=""; PKG_SOCAT=""; PKG_VNC=""; PKG_PY=""
+if command -v dnf >/dev/null; then
+  # Fedora, Nobara, RHEL, ...
+  PM="pkexec dnf install -y"
+  PKG_QEMU=qemu-system-x86-core; PKG_IMG=qemu-img; PKG_DNS=dnsmasq
+  PKG_NM=NetworkManager; PKG_SOCAT=socat; PKG_VNC=tigervnc; PKG_PY="python3 python3-pip"
+elif command -v pacman >/dev/null; then
+  # Arch, Manjaro, EndeavourOS
+  PM="pkexec pacman -S --needed --noconfirm"
+  PKG_QEMU=qemu-desktop; PKG_IMG=qemu-img; PKG_DNS=dnsmasq
+  PKG_NM=networkmanager; PKG_SOCAT=socat; PKG_VNC=tigervnc; PKG_PY=python
+elif command -v apt-get >/dev/null; then
+  # Debian, Ubuntu, Mint, Pop!_OS
+  PM="pkexec apt-get install -y"
+  pkexec apt-get update -qq 2>/dev/null || true
+  PKG_QEMU=qemu-system-x86; PKG_IMG=qemu-utils; PKG_DNS=dnsmasq-base
+  PKG_NM=network-manager; PKG_SOCAT=socat; PKG_VNC=tigervnc-viewer; PKG_PY="python3 python3-venv python3-pip"
+elif command -v zypper >/dev/null; then
+  # openSUSE
+  PM="pkexec zypper install -y"
+  PKG_QEMU=qemu-x86; PKG_IMG=qemu-tools; PKG_DNS=dnsmasq
+  PKG_NM=NetworkManager; PKG_SOCAT=socat; PKG_VNC=tigervnc; PKG_PY="python3 python3-pip"
+else
+  die "gerenciador de pacotes nao reconhecido. Instale manualmente: qemu, qemu-img, dnsmasq, NetworkManager, socat, python3"
+fi
+
 need=()
-command -v qemu-system-x86_64 >/dev/null || need+=(qemu-system-x86-core)
-command -v qemu-img >/dev/null || need+=(qemu-img)
-command -v dnsmasq  >/dev/null || need+=(dnsmasq)
-command -v nmcli    >/dev/null || need+=(NetworkManager)
-command -v socat    >/dev/null || need+=(socat)
+command -v qemu-system-x86_64 >/dev/null || need+=($PKG_QEMU)
+command -v qemu-img >/dev/null || need+=($PKG_IMG)
+command -v dnsmasq  >/dev/null || need+=($PKG_DNS)
+command -v nmcli    >/dev/null || need+=($PKG_NM)
+command -v socat    >/dev/null || need+=($PKG_SOCAT)
+command -v python3  >/dev/null || need+=($PKG_PY)
 command -v uv       >/dev/null || warn "uv nao encontrado (usarei python -m venv)"
 if [[ ${#need[@]} -gt 0 ]]; then
-  say "   instalando: ${need[*]}"
-  if command -v dnf >/dev/null; then pkexec dnf install -y "${need[@]}"
-  elif command -v pacman >/dev/null; then pkexec pacman -S --noconfirm "${need[@]}"
-  elif command -v apt >/dev/null; then pkexec apt-get install -y "${need[@]}"
-  else die "gerenciador de pacotes nao reconhecido; instale: ${need[*]}"; fi
+  say "   instalando (${PM%% *}...): ${need[*]}"
+  $PM "${need[@]}" || die "falha ao instalar dependencias"
 fi
 ok "qemu, dnsmasq, NetworkManager, socat presentes"
 
