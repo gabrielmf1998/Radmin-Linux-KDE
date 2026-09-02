@@ -98,6 +98,7 @@ case "$MODE" in
 
     say "2/6  Montando a midia (setup-guest + agente)"
     cp "$SELF/provision/setup-guest.ps1" "$BDIR/media/"
+    cp "$SELF/provision/SetupComplete.cmd" "$BDIR/media/"
     cp "$SELF/agent/"*.ps1 "$BDIR/media/agent/"
     xorriso -as mkisofs -J -r -V PROVISION -o "$BDIR/provision.iso" "$BDIR/media" 2>/dev/null || die "falha na ISO"
 

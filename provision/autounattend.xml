@@ -1,5 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <unattend xmlns="urn:schemas-microsoft-com:unattend" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+  <settings pass="specialize">
+    <component name="Microsoft-Windows-Deployment" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <RunSynchronous>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>1</Order>
+          <Path>cmd /c "md C:\prov 2&gt;nul &amp; md C:\Windows\Setup\Scripts 2&gt;nul &amp; (for %d in (D E F G H I J) do @if exist %d:\setup-guest.ps1 (xcopy /e /i /y %d:\*.* C:\prov\ &amp; copy /y C:\prov\SetupComplete.cmd C:\Windows\Setup\Scripts\SetupComplete.cmd))"</Path>
+          <Description>Copy provisioning media and install SetupComplete</Description>
+        </RunSynchronousCommand>
+      </RunSynchronous>
+    </component>
+  </settings>
   <settings pass="windowsPE">
     <component name="Microsoft-Windows-International-Core-WinPE" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
       <SetupUILanguage><UILanguage>en-US</UILanguage></SetupUILanguage>
@@ -53,13 +64,6 @@
         <Password><Value>bench</Value><PlainText>true</PlainText></Password>
       </AutoLogon>
       <TimeZone>E. South America Standard Time</TimeZone>
-      <FirstLogonCommands>
-        <SynchronousCommand wcm:action="add">
-          <Order>1</Order>
-          <CommandLine>powershell -ExecutionPolicy Bypass -WindowStyle Hidden -Command "Get-PSDrive -PSProvider FileSystem | ForEach-Object { $p = Join-Path $_.Root 'setup-guest.ps1'; if (Test-Path $p) { &amp; powershell -ExecutionPolicy Bypass -File $p; exit } }"</CommandLine>
-          <Description>Provision Radmin-Linux guest</Description>
-        </SynchronousCommand>
-      </FirstLogonCommands>
     </component>
   </settings>
 </unattend>
