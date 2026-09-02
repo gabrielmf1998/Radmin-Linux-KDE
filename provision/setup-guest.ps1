@@ -1,80 +1,58 @@
 # ============================================================
-#  setup-guest.ps1 - provisionamento do convidado, em 2 fases.
+#  setup-guest.ps1 - provisionamento do convidado, UMA fase.
+#  Rodado como SYSTEM ao FINAL do setup (via SetupComplete.cmd).
 #
-#  -Phase system : roda como SYSTEM ao FINAL do setup (via SetupComplete.cmd).
-#     abre o sistema (UAC/RDP/firewall), instala o agente, e agenda a fase 'user'
-#     no primeiro logon (RunOnce), onde ha sessao interativa.
-#  -Phase user   : roda no 1o logon do bench (sessao interativa). Instala o Radmin
-#     (o installer NSIS TRAVA sem sessao interativa), configura o ICS e desliga.
+#  Cada passo foi validado isoladamente:
+#   - Radmin instala com /VERYSILENT (Inno Setup; /S NAO funciona) mesmo em
+#     sessao 0 (SYSTEM) via Start-Process -Wait.
+#   - O ICS NAO e feito aqui: o agente (net-orchestrator) o configura no 1o boot
+#     em producao. Isso evita a dependencia do servico de firewall no provisioning.
 #
-#  Assets esperados em C:\prov\  (Radmin_VPN.exe, agent\*.ps1) — copiados pelo
-#  SetupComplete.cmd a partir da midia de provisao.
+#  Assets em C:\prov\ (Radmin_VPN.exe, agent\*.ps1), copiados pelo SetupComplete.cmd.
 #  Log em C:\provision.log
 # ============================================================
-param([ValidateSet("system","user")] [string]$Phase = "system")
 $ErrorActionPreference = "SilentlyContinue"
 $LOG  = "C:\provision.log"
 $PROV = "C:\prov"
-function Log($m){ $ts=Get-Date -Format "HH:mm:ss"; Add-Content $LOG "[$ts] ($Phase) $m" }
+function Log($m){ $ts=Get-Date -Format "HH:mm:ss"; Add-Content $LOG "[$ts] $m" }
 
-if ($Phase -eq "system") {
-  Log "=== fase system iniciada ==="
-  # 1. abre o sistema
-  Set-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name EnableLUA -Value 0 -Type DWord
-  Set-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name LocalAccountTokenFilterPolicy -Value 1 -Type DWord
-  Set-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server" -Name fDenyTSConnections -Value 0 -Type DWord
-  Set-Service RemoteRegistry -StartupType Automatic; Start-Service RemoteRegistry
-  Set-Service MpsSvc -StartupType Disabled 2>$null
-  netsh advfirewall set allprofiles state off
-  Log "sistema aberto (UAC off, RDP on, firewall off)"
+Log "=== provisionamento iniciado ==="
 
-  # 2. instala o agente (tarefas de boot: power/net/health/update)
-  New-Item -ItemType Directory -Path "C:\radmin-agent" -Force | Out-Null
-  Copy-Item "$PROV\agent\*.ps1" "C:\radmin-agent\" -Force
-  & powershell -ExecutionPolicy Bypass -File "C:\radmin-agent\agent-install.ps1" | Out-Null
-  & powershell -ExecutionPolicy Bypass -File "C:\radmin-agent\power-guard.ps1" | Out-Null
-  Log "agente instalado"
+# 1. abre o sistema (UAC off, RDP on, firewall off). NAO desabilita o MpsSvc:
+#    o ICS depende dele. Firewall off via netsh mantem o servico rodando.
+Set-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name EnableLUA -Value 0 -Type DWord
+Set-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name LocalAccountTokenFilterPolicy -Value 1 -Type DWord
+Set-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server" -Name fDenyTSConnections -Value 0 -Type DWord
+Set-Service RemoteRegistry -StartupType Automatic; Start-Service RemoteRegistry
+netsh advfirewall set allprofiles state off
+Log "1. sistema aberto (UAC off, RDP on, firewall off; MpsSvc mantido)"
 
-  # 3. agenda a fase 'user' no proximo logon (sessao interativa p/ o Radmin)
-  $ro = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce"
-  New-ItemProperty $ro -Name "RadminProvision" -PropertyType String -Force `
-    -Value "powershell -ExecutionPolicy Bypass -WindowStyle Hidden -File C:\prov\setup-guest.ps1 -Phase user" | Out-Null
-  Log "fase user agendada (RunOnce). Fim da fase system."
-  exit
-}
-
-# ---------------- fase user (sessao interativa) ----------------
-Log "=== fase user iniciada ==="
+# 2. Radmin VPN silencioso (/VERYSILENT - Inno Setup)
 $rad = "$PROV\Radmin_VPN.exe"
 if (Test-Path $rad) {
-  if (-not (Test-Path "C:\Program Files (x86)\Radmin VPN\RvControlSvc.exe")) {
-    Log "instalando Radmin VPN (sessao interativa)"
-    $p = Start-Process $rad -ArgumentList "/S" -Wait -PassThru
-    Log "installer exit=$($p.ExitCode)"
-  }
+  Log "2. instalando Radmin VPN (/VERYSILENT)"
+  $p = Start-Process $rad -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait -PassThru
   for ($i=0; $i -lt 30; $i++) {
-    if (Get-WmiObject Win32_NetworkAdapter | Where-Object {$_.Description -match "Radmin"}) { break }
+    if (Test-Path "C:\Program Files (x86)\Radmin VPN\RvControlSvc.exe") { break }
     Start-Sleep 2
   }
   Start-Service RvControlSvc
-  Log "Radmin instalado=$((Test-Path 'C:\Program Files (x86)\Radmin VPN\RvControlSvc.exe')) svc=$((Get-Service RvControlSvc).Status)"
-} else { Log "ERRO: $rad ausente" }
+  $ok = Test-Path "C:\Program Files (x86)\Radmin VPN\RvControlSvc.exe"
+  Log "   exit=$($p.ExitCode) instalado=$ok svc=$((Get-Service RvControlSvc).Status)"
+} else { Log "2. ERRO: $rad ausente" }
 
-# ICS: placa Radmin = publica, placa isolada (MAC ...26:00:02) = privada
-$radNic = Get-WmiObject Win32_NetworkAdapter | Where-Object {$_.NetConnectionID -and $_.Description -match "Radmin"} | Select-Object -First 1
-$isoNic = Get-WmiObject Win32_NetworkAdapter | Where-Object {$_.MACAddress -and $_.MACAddress.Replace(":","").ToUpper() -eq "525400260002"} | Select-Object -First 1
-if ($radNic -and $isoNic) {
-  $share = New-Object -ComObject HNetCfg.HNetShare
-  foreach ($c in $share.EnumEveryConnection) { $cfg=$share.INetSharingConfigurationForINetConnection($c); if ($cfg.SharingEnabled) { $cfg.DisableSharing() } }
-  Start-Sleep 2
-  foreach ($c in $share.EnumEveryConnection) { if ($share.NetConnectionProps($c).Name -eq $radNic.NetConnectionID) { $share.INetSharingConfigurationForINetConnection($c).EnableSharing(0) } }
-  Start-Sleep 2
-  foreach ($c in $share.EnumEveryConnection) { if ($share.NetConnectionProps($c).Name -eq $isoNic.NetConnectionID) { $share.INetSharingConfigurationForINetConnection($c).EnableSharing(1) } }
-  Log "ICS aplicado (rad=$($radNic.NetConnectionID) iso=$($isoNic.NetConnectionID))"
-} else { Log "ERRO ICS: placas rad=$($radNic.NetConnectionID) iso=$($isoNic.NetConnectionID)" }
+# 3. agente (tarefas de boot: power/net/health/update). O net-orchestrator
+#    configura o ICS no 1o boot em producao.
+New-Item -ItemType Directory -Path "C:\radmin-agent" -Force | Out-Null
+Copy-Item "$PROV\agent\*.ps1" "C:\radmin-agent\" -Force
+& powershell -ExecutionPolicy Bypass -File "C:\radmin-agent\agent-install.ps1" | Out-Null
+& powershell -ExecutionPolicy Bypass -File "C:\radmin-agent\power-guard.ps1" | Out-Null
+$ntasks = (schtasks /query 2>$null | Select-String RadminAgent).Count
+Log "3. agente instalado ($ntasks tarefas)"
 
-# identidade limpa p/ distribuicao (sem rede associada)
+# 4. identidade limpa p/ distribuicao (sem rede associada)
 Set-ItemProperty "HKLM:\SOFTWARE\Wow6432Node\Famatech\RadminVPN\1.0" -Name Alias -Value "RADMIN-LINUX" -Type String
+
 Log "=== provisionamento CONCLUIDO ==="
 "DONE" | Out-File C:\provision-done.txt -Encoding ASCII
 Start-Sleep 3
