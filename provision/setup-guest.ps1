@@ -30,15 +30,26 @@ Log "   sistema aberto"
 $rad = Join-Path $MEDIA "Radmin_VPN.exe"
 if(Test-Path $rad){
   Log "2. instalando Radmin VPN ($rad)"
-  $p = Start-Process $rad -ArgumentList "/S" -Wait -PassThru
-  Log "   exit=$($p.ExitCode)"
+  # o instalador do Radmin (NSIS) TRAVA em sessao 0 headless: precisa de sessao
+  # interativa. Rodamos via tarefa agendada no usuario logado (sessao 1) com /S.
+  $already = Test-Path "C:\Program Files (x86)\Radmin VPN\RvControlSvc.exe"
+  if(-not $already){
+    schtasks /create /tn RvInstall /tr "`"$rad`" /S" /sc once /st 00:00 /ru bench /rp bench /it /f | Out-Null
+    schtasks /run /tn RvInstall | Out-Null
+    Log "   instalador disparado na sessao interativa; aguardando..."
+    for($i=0;$i -lt 90;$i++){
+      if(Test-Path "C:\Program Files (x86)\Radmin VPN\RvControlSvc.exe"){ break }
+      Start-Sleep 4
+    }
+    schtasks /delete /tn RvInstall /f 2>$null | Out-Null
+  }
   # espera a placa Radmin aparecer
   for($i=0;$i -lt 30;$i++){
     if(Get-WmiObject Win32_NetworkAdapter | Where-Object {$_.Description -match "Radmin"}){ break }
     Start-Sleep 2
   }
   Start-Service RvControlSvc
-  Log "   servico: $((Get-Service RvControlSvc).Status)"
+  Log "   instalado=$((Test-Path 'C:\Program Files (x86)\Radmin VPN\RvControlSvc.exe')) servico=$((Get-Service RvControlSvc).Status)"
 } else { Log "2. ERRO: Radmin_VPN.exe nao esta na midia" }
 
 # --- 3. ICS (Radmin=publica, placa isolada 52:54:00:26:00:02=privada) ---
