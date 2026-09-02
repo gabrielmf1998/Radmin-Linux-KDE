@@ -179,7 +179,10 @@ class MainWindow(QMainWindow):
         self.healthtimer.start(HEALTH_MS)
         self.refresh()
         # descobre a lista completa de peers logo apos abrir (uma vez)
-        QTimer.singleShot(8000, self.discover_now)
+        # descoberta pesada (dump ~200MB) so na 1a vez (roster vazio);
+        # depois o roster ja persiste os membros. Manual via 'Sync members'.
+        if not self.roster.all_ips():
+            QTimer.singleShot(12000, self.discover_now)
 
     # ---------- layout ----------
     def _build(self):
@@ -751,12 +754,21 @@ class MainWindow(QMainWindow):
         self._closing = True
         self.timer.stop()
         self.pingtimer.stop()
-        # espera qualquer QThread filho vivo (fetcher/pinger/action, mesmo recriado)
+        self.healthtimer.stop()
+        # mata subprocessos externos (wmiexec/ping/dump) para os workers saírem
+        import backend
+        for p in list(getattr(backend, "_LIVE_PROCS", ())):
+            try: p.kill()
+            except Exception: pass  # noqa
+        # espera cada QThread filho um tempo curto; se nao sair, termina a força
+        # (melhor terminar do que deixar o Qt abortar com qFatal no finalize)
         from PySide6.QtCore import QThread as _QT
         for t in self.findChildren(_QT):
             try:
                 if t.isRunning():
-                    t.wait(20000)
+                    if not t.wait(4000):
+                        t.terminate()
+                        t.wait(1000)
             except RuntimeError:
                 pass
 

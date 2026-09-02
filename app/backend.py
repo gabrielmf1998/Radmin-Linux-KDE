@@ -42,16 +42,33 @@ class State:
 # cache do ultimo estado, p/ list_networks sem novo round-trip
 _last: "State | None" = None
 
+# subprocessos externos vivos (wmiexec etc), p/ o shutdown matar e liberar os workers
+_LIVE_PROCS: set = set()
+
+
+def run_tracked(cmd: str, timeout: int) -> str:
+    """subprocess.run rastreado: registra o processo p/ poder mata-lo no shutdown."""
+    p = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE,
+                         stderr=subprocess.PIPE, text=True)
+    _LIVE_PROCS.add(p)
+    try:
+        out, err = p.communicate(timeout=timeout)
+        return (out or "") + "\n" + (err or "")
+    except subprocess.TimeoutExpired:
+        p.kill()
+        try: p.communicate(timeout=5)
+        except Exception: pass  # noqa
+        raise
+    finally:
+        _LIVE_PROCS.discard(p)
+
 
 def _run_shim(timeout: int = 40) -> str:
     cmd = (
         f"{WMIEXEC} -shell-type powershell {TARGET} "
         f'"powershell -ExecutionPolicy Bypass -File {SHIM_PATH}"'
     )
-    out = subprocess.run(
-        cmd, shell=True, capture_output=True, text=True, timeout=timeout
-    )
-    return out.stdout + "\n" + out.stderr
+    return run_tracked(cmd, timeout)
 
 
 def fetch_state(timeout: int = 40) -> State:
