@@ -54,8 +54,8 @@ perdido o carrier (device tun recriado com a VM viva) ele **reinicia a VM** sozi
 
 ## Limites (honestos)
 
-- A GUI real mostra o **apelido Radmin** ("Kaylarica_Laptop"); a shim só alcança o
-  **hostname NetBIOS** ("PC-BIA"). O apelido bonito vive no protocolo LPC
+- A GUI real mostra o **apelido Radmin** ("ALICE-LAPTOP"); a shim só alcança o
+  **hostname NetBIOS** ("BOB-PC"). O apelido bonito vive no protocolo LPC
   (`RadminVpnGuiChannel`) — decifrá-lo seria uma fase à parte.
 - Cada refresh custa ~15-20s (o WMI reconecta o SMB + nbtstat por peer).
 - Depende de: VM ligada, tap `192.168.137.2` no ar, UAC derrubado na VM.
