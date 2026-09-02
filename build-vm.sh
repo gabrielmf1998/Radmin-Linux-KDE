@@ -79,7 +79,19 @@ case "$MODE" in
     command -v xorriso  >/dev/null || die "xorriso ausente (instale xorriso)"
     for t in mkfs.vfat mcopy; do command -v $t >/dev/null || die "$t ausente (instale mtools/dosfstools)"; done
 
-    BDIR="${RADMIN_BUILD:-$SELF/build}"; rm -rf "$BDIR"; mkdir -p "$BDIR/media/agent"
+    BDIR="${RADMIN_BUILD:-$SELF/build}"
+    # PROTECAO CRITICA: o disco da VM cresce ate ~10GB durante a instalacao.
+    # Se BDIR estiver em tmpfs (/tmp e RAM na maioria das distros), isso ESGOTA
+    # a RAM e TRAVA a maquina. Recusar tmpfs.
+    mkdir -p "$BDIR"
+    FSTYPE=$(stat -f -c %T "$BDIR" 2>/dev/null)
+    if [[ "$FSTYPE" == "tmpfs" || "$FSTYPE" == "ramfs" ]]; then
+      die "BDIR ($BDIR) esta em $FSTYPE (RAM). Isso travaria a maquina.
+    Use um disco real: RADMIN_BUILD=/caminho/em/disco ./build-vm.sh --from-scratch ..."
+    fi
+    AVAIL_GB=$(df -BG --output=avail "$BDIR" 2>/dev/null | tail -1 | tr -dc '0-9')
+    [[ -n "$AVAIL_GB" && "$AVAIL_GB" -lt 15 ]] && die "pouco espaco em $BDIR (${AVAIL_GB}G); precisa de ~15G"
+    rm -rf "$BDIR"; mkdir -p "$BDIR/media/agent"
     say "1/6  Baixando o Radmin VPN (na midia de provisionamento)"
     RURL="https://download.radmin-vpn.com/download/files/Radmin_VPN_2.0.4899.9.exe"
     curl -fsSL "$RURL" -o "$BDIR/media/Radmin_VPN.exe" || die "falha ao baixar o Radmin"
@@ -100,7 +112,9 @@ case "$MODE" in
 
     say "5/6  Instalando + provisionando (headless, ~15 min). Acompanhe: vncviewer 127.0.0.1:5905"
     # 2 NICs: NAT (internet p/ o Radmin) + a isolada com o MAC que o ICS espera
-    qemu-system-x86_64 -name radmin-build -machine q35,accel=kvm -cpu host -smp 4 -m 4096 \
+    # prioridade baixa de CPU e I/O: o build nunca deve travar o desktop
+    nice -n 15 ionice -c2 -n7 \
+    qemu-system-x86_64 -name radmin-build -machine q35,accel=kvm -cpu host -smp 2 -m 3072 \
       -drive file="$DISK",if=none,id=hd0,format=qcow2,cache=writeback \
       -device ich9-ahci,id=ahci -device ide-hd,drive=hd0,bus=ahci.0 \
       -drive file="$WINISO",if=none,id=cd0,media=cdrom,readonly=on -device ide-cd,drive=cd0,bus=ahci.1 \

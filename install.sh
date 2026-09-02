@@ -143,9 +143,13 @@ else
   warn "ou rode ./build-vm.sh para construir uma limpa do zero."
 fi
 # copia os scripts de execucao da VM (bench-run/view/stop) se existirem ao lado da imagem
-for f in bench-run.sh bench-view.sh bench-stop.sh common.sh; do
-  [[ -f "$SELF/vm/$f" ]] && cp "$SELF/vm/$f" "$VMDIR/"
-done
+# scripts de execucao da VM (parametrizados pelo config; rodam com nice/ionice)
+cp "$SELF/vm/vm-run.sh"  "$VMDIR/bench-run.sh"
+cp "$SELF/vm/vm-view.sh" "$VMDIR/bench-view.sh"
+cp "$SELF/vm/vm-stop.sh" "$VMDIR/bench-stop.sh"
+chmod +x "$VMDIR"/bench-*.sh
+# o env.sh precisa estar acessivel a partir do VMDIR (os scripts fazem source ../env.sh)
+cp "$SELF/env.sh" "$HOME_DIR/env.sh" 2>/dev/null || true
 
 # ---------- 6. rede isolada + DHCP ----------
 say "6/8  Interface isolada + DHCP"
