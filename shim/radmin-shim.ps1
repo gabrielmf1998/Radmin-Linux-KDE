@@ -1,7 +1,7 @@
 # ============================================================
-#  radmin-shim.ps1  -  API JSON do Radmin VPN para o cliente Linux
-#  Compativel com PowerShell 2.0 (Windows 7) - JSON montado a mao.
-#  Saida: bloco entre <<<RADMINJSON>>> e <<<END>>>. So-leitura.
+#  radmin-shim.ps1  -  Radmin VPN JSON API for the Linux client
+#  Compatible with PowerShell 2.0 (Windows 7) - JSON built by hand.
+#  Output: a block between <<<RADMINJSON>>> and <<<END>>>. Read-only.
 # ============================================================
 $ErrorActionPreference = "SilentlyContinue"
 
@@ -30,7 +30,7 @@ function Get-ServiceState {
 $nodeIp = Get-NodeIp
 $svc    = Get-ServiceState
 
-# Peers = tabela ARP da interface Radmin
+# Peers = ARP table of the Radmin interface
 $peerJson = @()
 $arp = (arp -a) 2>$null
 $inRadmin = $false
@@ -45,7 +45,7 @@ foreach ($line in $arp) {
     $ip = $matches[1]; $mac = $matches[2]; $type = $matches[3]
     if ($ip -eq "26.255.255.255") { continue }
     if ($ip -eq $nodeIp) { continue }
-    # tenta o hostname NetBIOS (nome real da maquina do peer)
+    # try the NetBIOS hostname (the peer machine's real name)
     $hn = ""
     $nb = (nbtstat -A $ip) 2>$null
     foreach ($nl in $nb) {
@@ -55,7 +55,7 @@ foreach ($line in $arp) {
   }
 }
 
-# redes associadas (GUIDs sob Networks) + alias do no
+# associated networks (GUIDs under Networks) + node alias
 $netKey = "HKLM:\SOFTWARE\Wow6432Node\Famatech\RadminVPN\1.0\Networks"
 $netJson = @()
 if (Test-Path $netKey) {

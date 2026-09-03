@@ -1,19 +1,21 @@
 #!/usr/bin/env bash
-# Roda a VM headless (produção). Prioridade de I/O baixa p/ nunca travar o desktop.
-# Parametrizado pelo config central (env.sh). RDP e VNC via localhost.
+# Runs the headless VM (production). Low I/O priority so it never stalls the desktop.
+# Parameterized by the central config (env.sh). RDP and VNC via localhost.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
-# acha o env.sh (na raiz da instalacao)
+# find env.sh (at the install root)
 for c in "$HERE/../env.sh" "$HERE/env.sh"; do [[ -f "$c" ]] && source "$c" && break; done
 : "${RADMIN_VMDIR:=$HERE}"
 : "${RADMIN_TAP:=tapradmin}"
 : "${RADMIN_HOST:=192.168.137.1}"
 DISK="$RADMIN_VMDIR/bench.qcow2"
-RAM="${VM_RAM:-1024}"; SMP="${VM_SMP:-2}"
+# Tiny footprint on purpose (512 MB / 1 CPU) so the VM never hogs the host.
+# Override with RADMIN_VM_RAM / RADMIN_VM_SMP if a peer's Windows needs more.
+RAM="${VM_RAM:-${RADMIN_VM_RAM:-512}}"; SMP="${VM_SMP:-${RADMIN_VM_SMP:-1}}"
 VNC_PORT="${VM_VNC:-3}"; RDP_PORT="${VM_RDP:-13391}"; RADMIN_PORT="${VM_RADMIN:-14899}"
-[[ -f "$DISK" ]] || { echo "imagem nao encontrada: $DISK"; exit 1; }
+[[ -f "$DISK" ]] || { echo "image not found: $DISK"; exit 1; }
 
-# 2a NIC na tap isolada, se existir (host<->VM)
+# 2nd NIC on the isolated tap, if it exists (host<->VM)
 TAPARGS=()
 if ip link show "$RADMIN_TAP" >/dev/null 2>&1; then
   TAPARGS=(-netdev tap,id=n1,ifname="$RADMIN_TAP",script=no,downscript=no \

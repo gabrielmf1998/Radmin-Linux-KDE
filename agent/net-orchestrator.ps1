@@ -1,15 +1,15 @@
 # ============================================================
-#  net-orchestrator.ps1  -  garante a conectividade Radmin<->Linux
-#  Roda no boot da VM e sob demanda. Resolve o deadlock de ordem:
-#   1. estado limpo (remove ICS de tudo)
-#   2. espera o Radmin conectar de fato (RvControlSvc Running + IP 26.x)
-#   3. aplica ICS: placa Radmin = publica, placa isolada = privada
-#   4. confere 192.168.137.1 na placa isolada
-#  Idempotente. Log em C:\radmin-agent\net.log
+#  net-orchestrator.ps1  -  ensures Radmin<->Linux connectivity
+#  Runs at VM boot and on demand. Resolves the ordering deadlock:
+#   1. clean state (remove ICS from everything)
+#   2. wait for Radmin to actually connect (RvControlSvc Running + 26.x IP)
+#   3. apply ICS: Radmin adapter = public, isolated adapter = private
+#   4. check 192.168.137.1 on the isolated adapter
+#  Idempotent. Log in C:\radmin-agent\net.log
 # ============================================================
 param([int]$WaitSec = 120)
 $ErrorActionPreference = "SilentlyContinue"
-$ISO_MAC = "525400260002"   # placa isolada (ligada a tapradmin do Linux)
+$ISO_MAC = "525400260002"   # isolated adapter (connected to Linux's tapradmin)
 $LOG = "C:\radmin-agent\net.log"
 
 function Log($m){ $ts=Get-Date -Format "HH:mm:ss"; Add-Content $LOG "[$ts] $m"; Write-Output $m }
@@ -27,32 +27,32 @@ function RadminIp {
   ($c.IPAddress | Where-Object { $_ -like "26.*" } | Select-Object -First 1)
 }
 
-Log "=== orquestrador iniciando ==="
+Log "=== orchestrator starting ==="
 
-# 1. espera o Radmin conectar (servico + IP na mesh)
+# 1. wait for Radmin to connect (service + mesh IP)
 $deadline = (Get-Date).AddSeconds($WaitSec)
 $connected = $false
 while((Get-Date) -lt $deadline){
   $svc = (Get-Service RvControlSvc).Status
   $ip  = RadminIp
-  if($svc -eq "Running" -and $ip){ $connected = $true; Log "Radmin conectado: $ip"; break }
+  if($svc -eq "Running" -and $ip){ $connected = $true; Log "Radmin connected: $ip"; break }
   Start-Sleep 3
 }
 if(-not $connected){
-  # forca o servico a subir e tenta de novo curto
-  Log "Radmin nao conectou; iniciando servico"
+  # force the service up and try again briefly
+  Log "Radmin did not connect; starting service"
   Start-Service RvControlSvc
   Start-Sleep 8
-  if(-not (RadminIp)){ Log "ERRO: sem IP Radmin apos espera"; exit 1 }
+  if(-not (RadminIp)){ Log "ERROR: no Radmin IP after waiting"; exit 1 }
 }
 
 $rad = RadminNic
 $iso = IsoNic
-if(-not $rad){ Log "ERRO: placa Radmin nao encontrada"; exit 1 }
-if(-not $iso){ Log "ERRO: placa isolada (MAC $ISO_MAC) nao encontrada"; exit 1 }
-Log "placas: radmin='$($rad.NetConnectionID)' isolada='$($iso.NetConnectionID)'"
+if(-not $rad){ Log "ERROR: Radmin adapter not found"; exit 1 }
+if(-not $iso){ Log "ERROR: isolated adapter (MAC $ISO_MAC) not found"; exit 1 }
+Log "adapters: radmin='$($rad.NetConnectionID)' isolated='$($iso.NetConnectionID)'"
 
-# 2. estado atual do ICS
+# 2. current ICS state
 $share = New-Object -ComObject HNetCfg.HNetShare
 function CfgFor($name){
   foreach($c in $share.EnumEveryConnection){
@@ -67,24 +67,24 @@ $radPub = ($radCfg.SharingEnabled -and $radCfg.SharingConnectionType -eq 0)
 $isoPriv = ($isoCfg.SharingEnabled -and $isoCfg.SharingConnectionType -eq 1)
 
 if($radPub -and $isoPriv){
-  Log "ICS ja correto (Radmin=publica, isolada=privada)"
+  Log "ICS already correct (Radmin=public, isolated=private)"
 } else {
-  Log "reaplicando ICS"
-  # limpa qualquer compartilhamento antes
+  Log "reapplying ICS"
+  # clear any sharing first
   foreach($c in $share.EnumEveryConnection){
     $cfg=$share.INetSharingConfigurationForINetConnection($c)
     if($cfg.SharingEnabled){ $cfg.DisableSharing() }
   }
   Start-Sleep 2
-  (CfgFor $rad.NetConnectionID).EnableSharing(0)   # publica
+  (CfgFor $rad.NetConnectionID).EnableSharing(0)   # public
   Start-Sleep 2
-  (CfgFor $iso.NetConnectionID).EnableSharing(1)   # privada
+  (CfgFor $iso.NetConnectionID).EnableSharing(1)   # private
   Start-Sleep 3
-  Log "ICS aplicado"
+  Log "ICS applied"
 }
 
-# 3. confirma IP da placa isolada (ICS forca 192.168.137.1)
+# 3. confirm the isolated adapter IP (ICS forces 192.168.137.1)
 $isoCfgW = Get-WmiObject Win32_NetworkAdapterConfiguration -Filter "Index=$($iso.Index)"
 $isoIp = $isoCfgW.IPAddress | Where-Object { $_ -like "192.168.137.*" }
-Log "IP placa isolada: $isoIp"
-if($isoIp){ Log "=== OK: conectividade pronta ===" } else { Log "AVISO: placa isolada sem IP 192.168.137.x" }
+Log "isolated adapter IP: $isoIp"
+if($isoIp){ Log "=== OK: connectivity ready ===" } else { Log "WARN: isolated adapter has no 192.168.137.x IP" }

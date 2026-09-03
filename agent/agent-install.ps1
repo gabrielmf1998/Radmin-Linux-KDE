@@ -1,24 +1,24 @@
 # ============================================================
-#  agent-install.ps1 - instala o agente Radmin-Linux na VM.
-#  Cria C:\radmin-agent, registra tarefas agendadas no boot:
-#   - power-guard   (ao ligar)
-#   - net-orchestrator (ao ligar, apos rede)
-#  Roda como SYSTEM no boot -> resolve o deadlock sem intervencao.
+#  agent-install.ps1 - installs the Radmin-Linux agent in the VM.
+#  Creates C:\radmin-agent, registers scheduled tasks at boot:
+#   - power-guard   (on power-on)
+#   - net-orchestrator (on power-on, after network)
+#  Runs as SYSTEM at boot -> resolves the deadlock without intervention.
 # ============================================================
 $ErrorActionPreference = "SilentlyContinue"
 $dir = "C:\radmin-agent"
 New-Item -ItemType Directory -Path $dir -Force | Out-Null
 
-# tarefa: power-guard ao ligar (SYSTEM)
+# task: power-guard on power-on (SYSTEM)
 schtasks /create /tn "RadminAgent-Power" /tr "powershell -ExecutionPolicy Bypass -WindowStyle Hidden -File $dir\power-guard.ps1" /sc onstart /ru SYSTEM /rl HIGHEST /f | Out-Null
 
-# tarefa: orquestrador de rede ao ligar (SYSTEM), com atraso p/ a rede subir
+# task: network orchestrator on power-on (SYSTEM), delayed for the network to come up
 schtasks /create /tn "RadminAgent-Net" /tr "powershell -ExecutionPolicy Bypass -WindowStyle Hidden -File $dir\net-orchestrator.ps1" /sc onstart /delay 0000:30 /ru SYSTEM /rl HIGHEST /f | Out-Null
 
-# tarefa: orquestrador tambem ao logon do bench (redundancia, caso ICS precise da sessao)
+# task: orchestrator also at the bench logon (redundancy, in case ICS needs the session)
 schtasks /create /tn "RadminAgent-Net-Logon" /tr "powershell -ExecutionPolicy Bypass -WindowStyle Hidden -File $dir\net-orchestrator.ps1" /sc onlogon /ru bench /rp bench /it /f | Out-Null
 
-# tarefa: health + auto-heal a cada 5 min (redundancia caso a UI esteja fechada)
+# task: health + auto-heal every 5 min (redundancy in case the UI is closed)
 schtasks /create /tn "RadminAgent-Health" /tr "powershell -ExecutionPolicy Bypass -WindowStyle Hidden -File $dir\health.ps1 -Heal" /sc minute /mo 5 /ru SYSTEM /rl HIGHEST /f | Out-Null
 
 Write-Output "<<<AGENTOK>>>"

@@ -1,6 +1,6 @@
 """
-icons.py - desenha os icones do clone (logo/tray, sinal, power) com QPainter,
-sem depender de arquivos externos. Cores calcadas na GUI real do Radmin VPN.
+icons.py - draws the clone's icons (logo/tray, signal, power) with QPainter,
+without relying on external files. Colors based on the real Radmin VPN GUI.
 """
 from __future__ import annotations
 from PySide6.QtGui import QPixmap, QPainter, QColor, QBrush, QPen, QPainterPath, QLinearGradient, QIcon

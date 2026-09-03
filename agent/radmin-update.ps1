@@ -1,8 +1,8 @@
 # ============================================================
-#  radmin-update.ps1 - descobre a ultima versao do Radmin VPN
-#  direto da pagina oficial, compara com a instalada e instala.
-#  -CheckOnly : so reporta (JSON), nao instala.
-#  Saida JSON entre <<<UPD>>> e <<<END>>>.
+#  radmin-update.ps1 - finds the latest Radmin VPN version
+#  straight from the official page, compares it with the installed one and installs.
+#  -CheckOnly : only reports (JSON), does not install.
+#  JSON output between <<<UPD>>> and <<<END>>>.
 # ============================================================
 param([switch]$CheckOnly)
 $ErrorActionPreference = "SilentlyContinue"
@@ -16,15 +16,15 @@ function InstalledVer {
   return $null
 }
 
-# descobre a ultima versao + URL raspando a pagina oficial
+# find the latest version + URL by scraping the official page
 function DiscoverLatest {
   [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls
   try {
     $html = (New-Object System.Net.WebClient).DownloadString($PAGE)
-  } catch { Log "falha ao baixar pagina: $($_.Exception.Message)"; return $null }
+  } catch { Log "failed to download page: $($_.Exception.Message)"; return $null }
   $mm = [regex]::Matches($html, "Radmin_VPN_([\d\.]+)\.exe")
-  if($mm.Count -eq 0){ Log "nenhuma versao na pagina"; return $null }
-  # pega a MAIOR versao encontrada
+  if($mm.Count -eq 0){ Log "no version on the page"; return $null }
+  # take the HIGHEST version found
   $best = $null
   foreach($x in $mm){
     try { $v=[version]$x.Groups[1].Value } catch { continue }
@@ -45,23 +45,23 @@ $hasNew = $false
 if($cur -and $lat){
   try { $hasNew = ([version]$lat -gt [version]$cur) } catch { $hasNew = ($cur -ne $lat) }
 }
-Log "instalada=$cur latest=$lat nova=$hasNew"
+Log "installed=$cur latest=$lat new=$hasNew"
 
 $installed = $false
 $err = ""
 if($hasNew -and -not $CheckOnly -and $url){
   $tmp = "C:\radmin-agent\Radmin_update.exe"
   try {
-    Log "baixando $url"
+    Log "downloading $url"
     (New-Object System.Net.WebClient).DownloadFile($url, $tmp)
     if(Test-Path $tmp){
-      Log "instalando silencioso"
+      Log "installing silently"
       $p = Start-Process $tmp -ArgumentList "/S" -Wait -PassThru
       $installed = ($p.ExitCode -eq 0)
       Remove-Item $tmp -Force
-      Log "instalado=$installed exit=$($p.ExitCode)"
+      Log "installed=$installed exit=$($p.ExitCode)"
     }
-  } catch { $err = $_.Exception.Message; Log "erro instalacao: $err" }
+  } catch { $err = $_.Exception.Message; Log "install error: $err" }
 }
 
 function J($s){ if($null -eq $s){'null'}else{'"'+([string]$s)+'"'} }

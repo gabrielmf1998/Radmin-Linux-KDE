@@ -35,6 +35,8 @@ install -m644 %{srcdir}/env.sh %{buildroot}%{_datadir}/radmin-linux/
 install -m755 %{srcdir}/preflight.sh %{srcdir}/radmin-linux.sh %{srcdir}/deploy-shim.sh \
         %{srcdir}/deploy-agent.sh %{srcdir}/install.sh %{srcdir}/build-vm.sh \
         %{buildroot}%{_datadir}/radmin-linux/
+install -d %{buildroot}%{_datadir}/radmin-linux/vm
+install -m755 %{srcdir}/vm/*.sh %{buildroot}%{_datadir}/radmin-linux/vm/
 install -d %{buildroot}%{_bindir}
 ln -s %{_datadir}/radmin-linux/radmin-linux.sh %{buildroot}%{_bindir}/radmin-linux
 install -d %{buildroot}%{_datadir}/applications
@@ -51,10 +53,10 @@ done
 %{_datadir}/icons/hicolor/*/apps/radmin-linux.png
 
 %post
-echo "Radmin-Linux instalado. Finalize com:"
-echo "  radmin-linux            (a UI monta a pilha na 1a execucao)"
-echo "ou forneca a imagem da VM: %{_datadir}/radmin-linux/install.sh IMG.qcow2.zst"
+echo "Radmin-Linux installed. Finish the per-user setup with:"
+echo "  %{_datadir}/radmin-linux/install.sh /path/to/radmin-linux-base.qcow2.zst"
+echo "then launch it from the menu, or run: radmin-linux"
 
 %changelog
 * Wed Sep 02 2026 gabrielmf1998 <110578985+gabrielmf1998@users.noreply.github.com> - 0.1.0-1
-- Primeira versao empacotada
+- First packaged release

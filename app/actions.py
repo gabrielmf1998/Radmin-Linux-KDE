@@ -1,33 +1,43 @@
 """
-actions.py - acoes de escrita (fase 3/4) e liveness ativo.
-- connect/disconnect: para/inicia o RvControlSvc (o botao power real da mesh).
-- leave_network: remove a associacao de rede (chave Networks {GUID}).
-- ping_sweep: mede online/offline direto do Linux (temos rota p/ 26.0.0.0/8).
-Comandos curtos vao por -EncodedCommand; o status pesado fica na shim.
+actions.py - write actions (phase 3/4) and active liveness.
+- connect/disconnect: stops/starts RvControlSvc (the mesh's real power switch).
+- leave_network: removes the network association (Networks {GUID} key).
+- ping_sweep: measures online/offline straight from Linux (we have a route to 26.0.0.0/8).
+Short commands go via -EncodedCommand; the heavy status stays in the shim.
 """
 from __future__ import annotations
-import base64, subprocess, concurrent.futures, os
-import backend  # reusa TARGET/WMIEXEC
+import base64, concurrent.futures, ipaddress
+import socket, struct, os, select, time, threading
+import backend  # reuses TARGET/WMIEXEC + the killable-subprocess registry
 
 REGBASE = r"HKLM:\SOFTWARE\Wow6432Node\Famatech\RadminVPN\1.0"
 
+# Liveness (ping sweep) safety limits. The sweep runs every 30s and must NEVER
+# turn into a storm of processes that freezes the user's machine:
+#  - Primary path is PROCESS-FREE: unprivileged ICMP sockets (no `ping` process at
+#    all), so a storm is physically impossible -- there are zero ping processes.
+#  - MAX_PING: hard cap on targets per sweep, whatever the roster holds.
+#  - Fallback (only where ICMP sockets are denied) uses `ping -n` (no reverse DNS:
+#    26.x has no PTR and would hang the resolver) bounded by a GLOBAL semaphore so
+#    at most PING_WORKERS ping processes can ever exist system-wide.
+MAX_PING = 300
+PING_WORKERS = 16
+_ICMP_ECHO = 8
+
 
 def _run_ps(script: str, timeout: int = 60) -> tuple[bool, str]:
-    """Roda um bloco PowerShell na VM via EncodedCommand (sem escaping)."""
+    """Run a PowerShell block on the VM via EncodedCommand (no escaping)."""
     b64 = base64.b64encode(script.encode("utf-16-le")).decode()
     cmd = (
         f"{backend.WMIEXEC} -shell-type powershell {backend.TARGET} "
         f'"powershell -EncodedCommand {b64}"'
     )
-    try:
-        out = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
-        blob = out.stdout + out.stderr
-        ok = "<<<ACTOK>>>" in blob
-        return ok, blob
-    except subprocess.TimeoutExpired:
+    rc, blob = backend.run_capture(cmd, timeout, shell=True)
+    if rc == 124:
         return False, "timeout"
-    except Exception as e:  # noqa
-        return False, str(e)
+    if rc == 255:
+        return False, blob or "cancelado"
+    return ("<<<ACTOK>>>" in blob), blob
 
 
 def connect(timeout: int = 60) -> tuple[bool, str]:
@@ -51,8 +61,8 @@ def disconnect(timeout: int = 60) -> tuple[bool, str]:
 
 
 def rename_node(new_name: str, timeout: int = 60) -> tuple[bool, str]:
-    """Muda o nome (Alias) do no que os outros peers veem. Persiste no registro
-    e reinicia o servico p/ re-anunciar a mesh."""
+    """Change the node's name (Alias) that other peers see. Persists in the registry
+    and restarts the service to re-announce to the mesh."""
     safe = new_name.replace('"', "").replace("'", "").strip()[:63]
     ps = (
         f'Set-ItemProperty "{REGBASE}" -Name Alias -Value "{safe}" -Type String;'
@@ -64,7 +74,7 @@ def rename_node(new_name: str, timeout: int = 60) -> tuple[bool, str]:
 
 
 def leave_network(guid: str, timeout: int = 60) -> tuple[bool, str]:
-    """Remove a associacao de rede (sai da rede). guid inclui as chaves {}."""
+    """Remove the network association (leave the network). guid includes the {} braces."""
     ps = (
         f'$k="{REGBASE}\\Networks\\{guid}";'
         'if(Test-Path $k){Remove-Item $k -Recurse -Force;'
@@ -74,23 +84,113 @@ def leave_network(guid: str, timeout: int = 60) -> tuple[bool, str]:
     return _run_ps(ps, timeout)
 
 
-def _ping1(ip: str) -> tuple[str, bool]:
+def _valid_targets(ips: list[str]) -> list[str]:
+    """Keep valid IPv4, dedupe, and CAP at MAX_PING. Shield against a poisoned
+    roster (bad dump) that would otherwise make the sweep ping thousands of IPs."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for ip in ips:
+        if ip in seen:
+            continue
+        try:
+            ipaddress.IPv4Address(ip)
+        except ValueError:
+            continue
+        seen.add(ip)
+        out.append(ip)
+        if len(out) >= MAX_PING:
+            break
+    return out
+
+
+# ---- primary path: unprivileged ICMP, ZERO processes ----------------------
+def _icmp_packet(seq: int) -> bytes:
+    # ICMP echo request. On a SOCK_DGRAM/IPPROTO_ICMP socket the kernel fills in
+    # the id and the checksum, so we send type=8, code=0, checksum=0, id=0.
+    return struct.pack("!BBHHH", _ICMP_ECHO, 0, 0, 0, seq & 0xFFFF) + b"radmin-linux"
+
+
+def _ping_sweep_icmp(ips: list[str], timeout: float = 1.0) -> dict[str, bool] | None:
+    """Ping every IP through ONE non-blocking ICMP socket -- no `ping` process at
+    all, so it can never storm. Returns ip->online, or None if the kernel denies
+    unprivileged ICMP (then the caller falls back to the bounded subprocess path)."""
     try:
-        r = subprocess.run(["ping", "-c1", "-W1", ip],
-                           capture_output=True, timeout=3)
-        return ip, (r.returncode == 0)
-    except Exception:  # noqa
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_ICMP)
+    except (PermissionError, OSError):
+        return None
+    res = {ip: False for ip in ips}
+    try:
+        s.setblocking(False)
+        for i, ip in enumerate(ips):               # fire all echo requests (cheap)
+            if backend._CANCEL.is_set():
+                return res
+            try:
+                s.sendto(_icmp_packet(i), (ip, 0))
+            except OSError:
+                pass
+        pending = set(ips)
+        deadline = time.monotonic() + timeout
+        while pending and time.monotonic() < deadline:
+            if backend._CANCEL.is_set():
+                break
+            rem = deadline - time.monotonic()
+            r, _, _ = select.select([s], [], [], min(0.2, max(0.0, rem)))
+            if not r:
+                continue
+            try:
+                data, addr = s.recvfrom(2048)
+            except OSError:
+                continue
+            src = addr[0]
+            if data and data[0] == 0 and src in res:   # type 0 = echo reply
+                res[src] = True
+                pending.discard(src)
+        return res
+    finally:
+        s.close()
+
+
+# ---- fallback: `ping` subprocess, capped by a GLOBAL semaphore -------------
+# Only used where ICMP sockets are denied. The semaphore caps concurrent ping
+# processes system-wide (belt-and-suspenders on top of the thread pool), so even
+# this path can never storm.
+_PING_GATE = threading.BoundedSemaphore(PING_WORKERS)
+
+
+def _ping1(ip: str) -> tuple[str, bool]:
+    if backend._CANCEL.is_set():
         return ip, False
+    with _PING_GATE:                               # global ceiling on ping procs
+        if backend._CANCEL.is_set():
+            return ip, False
+        # -n = no reverse DNS (26.x has no PTR and would hang the resolver).
+        rc, _ = backend.run_capture(["ping", "-n", "-c1", "-W1", ip], timeout=3)
+    return ip, (rc == 0)
 
 
-def ping_sweep(ips: list[str], workers: int = 32) -> dict[str, bool]:
-    """Pinga todos os IPs em paralelo do Linux. Retorna ip->online."""
+def _ping_sweep_subprocess(ips: list[str]) -> dict[str, bool]:
+    res: dict[str, bool] = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=PING_WORKERS) as ex:
+        futs = [ex.submit(_ping1, ip) for ip in ips]
+        for fut in concurrent.futures.as_completed(futs):
+            if backend._CANCEL.is_set():
+                for f in futs:
+                    f.cancel()
+                break
+            ip, up = fut.result()
+            res[ip] = up
+    return res
+
+
+def ping_sweep(ips: list[str], workers: int = PING_WORKERS) -> dict[str, bool]:
+    """Return ip->online for the given IPs. Process-free ICMP when allowed,
+    otherwise a bounded `ping` subprocess sweep. Both are capped and cancellable."""
+    ips = _valid_targets(ips)
     if not ips:
         return {}
-    res: dict[str, bool] = {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
-        for ip, up in ex.map(_ping1, ips):
-            res[ip] = up
+    res = _ping_sweep_icmp(ips)          # preferred: zero processes
+    if res is None:
+        res = _ping_sweep_subprocess(ips)  # fallback: hard-capped subprocess sweep
     return res
 
 
@@ -99,4 +199,4 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "sweep":
         print(ping_sweep(sys.argv[2:]))
     else:
-        print("uso: actions.py sweep <ip> [ip...]")
+        print("usage: actions.py sweep <ip> [ip...]")

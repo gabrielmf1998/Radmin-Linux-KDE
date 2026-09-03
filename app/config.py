@@ -1,7 +1,7 @@
 """
-config.py - configuracao central do Radmin-Linux (lado Python).
-Fonte de verdade: variaveis de ambiente > ~/.config/radmin-linux/config.env > defaults.
-O instalador escreve o config.env; sem ele, os defaults reproduzem o setup de dev.
+config.py - central configuration for Radmin-Linux (Python side).
+Source of truth: environment variables > ~/.config/radmin-linux/config.env > defaults.
+The installer writes config.env; without it, the defaults reproduce the dev setup.
 """
 from __future__ import annotations
 import os
@@ -28,16 +28,16 @@ _FILE = _load_env_file()
 
 
 def _get(key: str, default: str) -> str:
-    # env var tem prioridade, depois o arquivo, depois o default
+    # env var wins, then the file, then the default
     return os.environ.get(key) or _FILE.get(key) or default
 
 
-# raiz da instalacao (dev: a bancada; instalado: ~/.local/share/radmin-linux)
+# install root (dev: the bench; installed: ~/.local/share/radmin-linux)
 HOME = _get("RADMIN_HOME", "/mnt/samsung-980pro/VMs/ntlite-bench")
 VMDIR = _get("RADMIN_VMDIR", HOME)
 VENV = _get("RADMIN_VENV", f"{HOME}/.recon-venv")
 
-# rede / acesso a VM
+# network / VM access
 HOST = _get("RADMIN_HOST", "192.168.137.1")
 CRED = _get("RADMIN_CRED", "bench:bench")
 TARGET = _get("RADMIN_TARGET", f"{CRED}@{HOST}")
@@ -47,15 +47,19 @@ TAP = _get("RADMIN_TAP", "tapradmin")
 NMCON = _get("RADMIN_NMCON", "radmin-bridge")
 ISO_MAC = _get("RADMIN_ISO_MAC", "52:54:00:26:00:02")
 
-# caminhos derivados
+# derived paths
 PYTHON = f"{VENV}/bin/python"
 WMIEXEC = f"{PYTHON} {VENV}/bin/wmiexec.py"
 RUN_SCRIPT = _get("RADMIN_RUN", f"{VMDIR}/bench-run.sh")
 VIEW_SCRIPT = _get("RADMIN_VIEW", f"{VMDIR}/bench-view.sh")
 
-# caminhos na VM (Windows)
+# paths in the VM (Windows)
 SHIM_PATH = _get("RADMIN_SHIM", r"C:\radmin-shim.ps1")
 AGENT_DIR = _get("RADMIN_AGENT_DIR", r"C:\radmin-agent")
+
+# VM footprint — kept tiny so it never hurts the host (declared in the UI)
+VM_RAM = _get("RADMIN_VM_RAM", "512")   # MB
+VM_SMP = _get("RADMIN_VM_SMP", "1")     # vCPUs
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Cria C:\radmin-agent na VM e envia todos os scripts do agente.
+# Creates C:\radmin-agent in the VM and sends all the agent scripts.
 SELF="$(cd "$(dirname "$0")" && pwd)"
 source "$SELF/env.sh"
 "$RADMIN_PY" - <<PY
@@ -13,6 +13,6 @@ for f in sorted(glob.glob("$SELF/agent/*.ps1")):
     name=os.path.basename(f)
     d=open(f,"rb").read()
     c.putFile("C\$","\\\\radmin-agent\\\\"+name, io.BytesIO(d).read)
-    print("enviado:", name, len(d))
+    print("sent:", name, len(d))
 c.close()
 PY

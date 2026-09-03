@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-Radmin VPN (Linux) - clone so-leitura da GUI, alimentado pela shim na VM Windows.
-Fase 2: mostra no local, status do servico e peers (online via ARP, offline via
-roster). Apelido de peer e local. Nada aqui altera o Radmin real.
+Radmin VPN (Linux) - a read-only clone of the GUI, fed by the shim in the Windows VM.
+Phase 2: shows the local node, service status and peers (online via ARP, offline via
+roster). Peer nickname is local. Nothing here changes the real Radmin.
 """
 from __future__ import annotations
-import sys, os
+import sys, os, time
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QScrollArea, QFrame, QMenuBar, QMenu, QSystemTrayIcon, QInputDialog,
-    QStyle, QSizePolicy,
+    QStyle, QSizePolicy, QPushButton,
 )
 from PySide6.QtGui import QAction, QColor, QFont, QCursor
 from PySide6.QtCore import Qt, QThread, Signal, QTimer
@@ -20,11 +20,19 @@ import actions
 import agent
 import vmctl
 import icons
+import config
 from roster import Roster
 
-POLL_MS = 30000    # refresh completo (shim) a cada 30s
-PING_MS = 30000    # liveness (ping sweep) a cada 30s
-HEALTH_MS = 120000 # diagnostico + auto-heal a cada 2 min
+POLL_MS = 30000    # full refresh (shim) every 30s
+PING_MS = 30000    # liveness (ping sweep) every 30s
+HEALTH_MS = 120000 # diagnostics + auto-heal every 2 min
+MAX_ROWS = 300     # cap on peer rows (never create thousands of widgets)
+# Watchdog (auto-restart a wedged VM) must NEVER fire during a normal boot:
+#  - grace: no watchdog action for this long after a power-on (Windows boots ~1-2 min)
+#  - strikes: only recover after this many CONSECUTIVE unresponsive health cycles,
+#    i.e. a real hang, not a slow boot or a transient blip.
+WATCHDOG_GRACE_S = 240
+WATCHDOG_STRIKES = 3
 
 QSS = """
 * { color: #d9dde0; font-family: 'Segoe UI','Noto Sans',sans-serif; }
@@ -45,6 +53,8 @@ QMenu::item:selected { background: #1f4a5f; }
          padding: 1px 10px; font-size: 11px; font-weight: 600; }
 #badgeOff { background: #5a3030; color: #f2d6d6; border-radius: 8px;
             padding: 1px 10px; font-size: 11px; font-weight: 600; }
+#badgeWarn { background: #6b5a30; color: #f5ecd6; border-radius: 8px;
+             padding: 1px 10px; font-size: 11px; font-weight: 600; }
 QScrollArea { border: none; background: #1a1d20; }
 #list { background: #1a1d20; }
 .peer { background: #1a1d20; }
@@ -55,6 +65,14 @@ QScrollArea { border: none; background: #1a1d20; }
            padding: 2px 10px; font-size: 11px; }
 .netchipSel { background: #2f6f8c; color: #ffffff; border-radius: 9px;
               padding: 2px 10px; font-size: 11px; font-weight: 600; }
+#nettools { background: #182028; border-bottom: 1px solid #10151a; }
+#netAddBtn { background: #22323d; color: #cfe6ef; border: none; border-radius: 4px;
+             padding: 3px 10px; font-size: 12px; font-weight: 600; }
+#netAddBtn:hover { background: #2f6f8c; color: #ffffff; }
+.netHeader { background: #1f2a33; border-top: 1px solid #10151a;
+             border-bottom: 1px solid #10151a; }
+.netHeaderName { color: #cfe6ef; font-size: 12px; font-weight: 700; letter-spacing: 1px; }
+.netHeaderCount { color: #7f8c93; font-size: 11px; }
 #status { background: #12262f; color: #7f8c93; font-size: 11px; padding: 3px 8px; }
 QScrollBar:vertical { background: #16191c; width: 10px; margin: 0; }
 QScrollBar::handle:vertical { background: #3a444b; border-radius: 5px; min-height: 24px; }
@@ -106,7 +124,7 @@ class HealthWorker(QThread):
 
 
 class DiscoverWorker(QThread):
-    """Descobre a lista completa de peers (dump da GUI) - pesado, ocasional."""
+    """Discovers the complete peer list (GUI dump) - heavy, occasional."""
     done = Signal(object)
 
     def run(self):
@@ -114,28 +132,39 @@ class DiscoverWorker(QThread):
         self.done.emit(discover.discover_peers())
 
 
-class NetChip(QLabel):
-    """Chip de uma rede: clique filtra, duplo-clique renomeia."""
-    def __init__(self, guid, label, selected, on_click, on_rename):
-        super().__init__(label)
-        self.guid = guid
-        self.setProperty("class", "netchipSel" if selected else "netchip")
+class NetHeader(QFrame):
+    """Collapsible network-section header: click toggles, right-click manages."""
+    def __init__(self, gid, name, count, collapsed, on_toggle, on_menu):
+        super().__init__()
+        self.gid = gid
+        self.setProperty("class", "netHeader")
+        self.setObjectName("netHeader")
+        self.setFixedHeight(28)
         self.setCursor(QCursor(Qt.PointingHandCursor))
-        self.setToolTip(guid + "  (duplo-clique para renomear)")
-        self._on_click = on_click
-        self._on_rename = on_rename
+        lay = QHBoxLayout(self); lay.setContentsMargins(10, 2, 10, 2); lay.setSpacing(6)
+        self.arrow = QLabel("▶" if collapsed else "▼")
+        self.arrow.setStyleSheet("color:#7f8c93; font-size:10px;")
+        lay.addWidget(self.arrow)
+        nm = QLabel(name); nm.setProperty("class", "netHeaderName")
+        lay.addWidget(nm)
+        cnt = QLabel(f"· {count}"); cnt.setProperty("class", "netHeaderCount")
+        lay.addWidget(cnt)
+        lay.addStretch(1)
+        self._on_toggle = on_toggle
+        self._on_menu = on_menu
 
     def mousePressEvent(self, e):
-        self._on_click(self.guid)
-
-    def mouseDoubleClickEvent(self, e):
-        self._on_rename(self.guid)
+        if e.button() == Qt.RightButton and self._on_menu:
+            self._on_menu(self.gid, e.globalPosition().toPoint())
+        else:
+            self._on_toggle(self.gid)
 
 
 class PeerRow(QFrame):
-    def __init__(self, ip, name, online, on_rename):
+    def __init__(self, ip, name, online, on_rename, on_menu=None):
         super().__init__()
         self.ip = ip
+        self._on_menu = on_menu
         self.setProperty("class", "peer")
         self.setObjectName("peerRow")
         self.setFixedHeight(34)
@@ -165,6 +194,10 @@ class PeerRow(QFrame):
     def mouseDoubleClickEvent(self, e):
         self._on_rename(self.ip)
 
+    def contextMenuEvent(self, e):
+        if self._on_menu:
+            self._on_menu(self.ip, e.globalPos())
+
     def enterEvent(self, e):
         self.setStyleSheet(".peer{background:#243139;} #peerRow{background:#243139;}")
 
@@ -182,30 +215,86 @@ class MainWindow(QMainWindow):
         self._fetcher = None
         self._pinger = None
         self._action = None
+        self._threads = set()   # all live QThreads, for shutdown to wait on
         self._busy = False
+        self._booting = False   # VM on but WMI not answering yet (booting)
         self._closing = False
         self._last_service = "Unknown"
         self._vm_running = False
+        self._vm_started_at = 0.0        # monotonic time of the last power-on (watchdog grace)
+        self._unresponsive_strikes = 0   # consecutive unresponsive health cycles
         self._node_ip = ""
-        self._networks = []       # GUIDs das redes que o no participa
-        self._selected_net = None  # rede selecionada no filtro (None = todas)
+        self._networks = []       # GUIDs of the networks the node is in
+        self._selected_net = None  # network selected in the filter (None = all)
+        # Querying the VM (WMI/wmiexec) is OFF by default. An automatic query can
+        # spike CPU/I-O and stutter the whole desktop while the VM is busy, so the
+        # user opts in via System > "Auto-refresh", or queries once with "Refresh now".
+        self._auto = bool(self.roster.get_setting("auto_refresh", False))
         self._build()
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.refresh)
-        self.timer.start(POLL_MS)
         self.pingtimer = QTimer(self)
         self.pingtimer.timeout.connect(self.ping_now)
-        self.pingtimer.start(PING_MS)
         self._health = None
         self._last_health = None
         self._discover = None
         self.healthtimer = QTimer(self)
         self.healthtimer.timeout.connect(self.health_now)
+        # heavy discovery (~200MB dump) only on first run with an empty roster AND
+        # only in auto mode; in manual mode nothing queries until the user asks.
+        self._want_discover = self._auto and not self.roster.all_ips()
+        if self._auto:
+            self._start_auto_timers()
+            self.refresh()
+        else:
+            self._show_manual_idle()
+
+    # ---------- auto vs manual querying ----------
+    def _start_auto_timers(self):
+        self.timer.start(POLL_MS)
+        self.pingtimer.start(PING_MS)
         self.healthtimer.start(HEALTH_MS)
-        self.refresh()
-        # descoberta pesada (dump ~200MB) so na 1a vez (roster vazio); disparada
-        # pelo _apply quando a VM e confirmada ligada (nao num timer cego).
-        self._want_discover = not self.roster.all_ips()
+
+    def _stop_auto_timers(self):
+        self.timer.stop()
+        self.pingtimer.stop()
+        self.healthtimer.stop()
+
+    def _show_manual_idle(self):
+        """Manual mode on open: show the VM power state from the pidfile ONLY
+        (vmctl.is_running reads a file — no WMI, no wmiexec, nothing heavy). The
+        app stays idle until the user clicks Refresh or enables Auto-refresh."""
+        try:
+            running = vmctl.is_running()
+        except Exception:  # noqa
+            running = False
+        self._vm_running = running
+        self._booting = False
+        self.nodeName.setText("Radmin VPN" if running else "VM is off")
+        self.nodeIp.setText("Refresh to query the VM" if running else "click power to turn on")
+        self.badge.setText("Manual" if running else "Off")
+        self.badge.setObjectName("badgeWarn" if running else "badgeOff")
+        self.badge.setStyleSheet(QSS)
+        self.power.setPixmap(icons.power_pixmap(running, 48))
+        self._sync_actions(False)
+        self._update_tray()
+        # show the known peers (as offline) so you can organize them into networks
+        # without querying; a Refresh will light up who is actually online.
+        self._render_peers(set())
+        self.status.setText("● manual mode — Refresh to query"
+                            + ("" if running else " · VM off"))
+
+    def _toggle_auto(self, on: bool):
+        self._auto = bool(on)
+        self.roster.set_setting("auto_refresh", self._auto)
+        if self._auto:
+            self.status.setText("● auto-refresh ON — querying the VM every 30s")
+            self._start_auto_timers()
+            self.refresh()
+        else:
+            self._stop_auto_timers()
+            self._show_manual_idle()
+            self.status.setText("● auto-refresh OFF — manual (Refresh to query)")
 
     # ---------- layout ----------
     def _build(self):
@@ -219,6 +308,11 @@ class MainWindow(QMainWindow):
             m = QMenu(name, mb)
             if name == "System":
                 a = QAction("Refresh now", self); a.triggered.connect(self.refresh); m.addAction(a)
+                self.actAuto = QAction("Auto-refresh (query VM)", self)
+                self.actAuto.setCheckable(True); self.actAuto.setChecked(self._auto)
+                self.actAuto.setToolTip("Off by default so nothing queries the VM in the "
+                                        "background. Turn on to refresh every 30s.")
+                self.actAuto.toggled.connect(self._toggle_auto); m.addAction(self.actAuto)
                 m.addSeparator()
                 self.actVmOn = QAction("Turn VM on", self)
                 self.actVmOn.triggered.connect(self.do_vm_on); m.addAction(self.actVmOn)
@@ -236,6 +330,13 @@ class MainWindow(QMainWindow):
                 m.addSeparator()
                 q = QAction("Quit", self); q.triggered.connect(QApplication.quit); m.addAction(q)
             elif name == "Network":
+                self.actOnlineOnly = QAction("Show online only", self)
+                self.actOnlineOnly.setCheckable(True)
+                self.actOnlineOnly.setChecked(bool(self.roster.get_setting("online_only", False)))
+                self.actOnlineOnly.setToolTip("Hide offline peers from the list")
+                self.actOnlineOnly.toggled.connect(self._toggle_online_only)
+                m.addAction(self.actOnlineOnly)
+                m.addSeparator()
                 self.actConnect = QAction("Connect", self)
                 self.actConnect.triggered.connect(self.do_connect); m.addAction(self.actConnect)
                 self.actDisconnect = QAction("Disconnect", self)
@@ -263,6 +364,11 @@ class MainWindow(QMainWindow):
         logo = QLabel(); logo.setPixmap(icons.logo_pixmap(26)); hl.addWidget(logo)
         t = QLabel("RADMIN VPN"); t.setObjectName("logoText"); hl.addWidget(t)
         hl.addStretch(1)
+        # declared footprint: the VM is intentionally tiny so it never hogs the host
+        foot = QLabel(f"{config.VM_RAM} MB · {config.VM_SMP} CPU")
+        foot.setStyleSheet("color:#6f8290; font-size:10px; font-weight:600;")
+        foot.setToolTip("The Windows VM uses only this much RAM/CPU — it won't hog your machine")
+        hl.addWidget(foot)
         v.addWidget(header)
 
         # card do no
@@ -287,15 +393,21 @@ class MainWindow(QMainWindow):
         cl.addLayout(box, 1)
         v.addWidget(card)
 
-        # barra de redes (multiplas redes): mostra as redes que o no participa.
-        # Clicar filtra por rede; duplo-clique renomeia. Escondida se 0/1 rede.
-        self.netbar = QWidget(); self.netbar.setObjectName("netbar")
-        self.netbarLay = QHBoxLayout(self.netbar)
-        self.netbarLay.setContentsMargins(8, 4, 8, 4); self.netbarLay.setSpacing(6)
-        self.netbar.hide()
-        v.addWidget(self.netbar)
+        # networks toolbar (dedicated control up top): create/manage network groups.
+        # Peers are shown in collapsible per-network sections; assignment is MANUAL
+        # (right-click a peer -> Move to). Grouping is local, stored in the roster.
+        self.nettools = QWidget(); self.nettools.setObjectName("nettools")
+        ntl = QHBoxLayout(self.nettools); ntl.setContentsMargins(8, 4, 8, 4); ntl.setSpacing(6)
+        lbl = QLabel("Networks"); lbl.setStyleSheet("color:#8fa0aa; font-size:11px; font-weight:600;")
+        ntl.addWidget(lbl); ntl.addStretch(1)
+        self.addNetBtn = QPushButton("＋ Network"); self.addNetBtn.setObjectName("netAddBtn")
+        self.addNetBtn.setCursor(QCursor(Qt.PointingHandCursor))
+        self.addNetBtn.setToolTip("Create a network group, then right-click a peer to move it in")
+        self.addNetBtn.clicked.connect(self._add_group)
+        ntl.addWidget(self.addNetBtn)
+        v.addWidget(self.nettools)
 
-        # lista de peers
+        # peer list
         self.scroll = QScrollArea(); self.scroll.setWidgetResizable(True)
         self.listw = QWidget(); self.listw.setObjectName("list")
         self.listv = QVBoxLayout(self.listw)
@@ -304,8 +416,8 @@ class MainWindow(QMainWindow):
         self.scroll.setWidget(self.listw)
         v.addWidget(self.scroll, 1)
 
-        # barra de status
-        self.status = QLabel("iniciando…"); self.status.setObjectName("status")
+        # status bar
+        self.status = QLabel("starting…"); self.status.setObjectName("status")
         v.addWidget(self.status)
 
         self.setStyleSheet(QSS)
@@ -317,7 +429,7 @@ class MainWindow(QMainWindow):
         menu = QMenu()
         show = QAction("Show", self); show.triggered.connect(self._show_raise); menu.addAction(show)
         menu.addSeparator()
-        # controle total pela bandeja — o usuario nunca toca na VM
+        # full control from the tray — the user never touches the VM
         self.trayPower = QAction("Turn VM on/off", self)
         self.trayPower.triggered.connect(self.toggle_power); menu.addAction(self.trayPower)
         self.trayConn = QAction("Connect / Disconnect", self)
@@ -340,7 +452,7 @@ class MainWindow(QMainWindow):
             self.do_connect()
 
     def _update_tray(self):
-        """Reflete o estado no tooltip e no menu da bandeja."""
+        """Reflect the state in the tooltip and the tray menu."""
         if not self._vm_running:
             tip = "Radmin VPN — VM off"
         elif self._last_service == "Running":
@@ -354,6 +466,15 @@ class MainWindow(QMainWindow):
         if hasattr(self, "trayConn"):
             self.trayConn.setText("Disconnect" if self._last_service == "Running" else "Connect")
 
+    # ---------- worker threads ----------
+    def _start(self, t):
+        """Register the QThread and start it. Shutdown waits on all registered ones
+        (the QThreads are not Qt children of the window, so findChildren missed them
+        -> that is why the app aborted with a worker still running on close)."""
+        self._threads.add(t)
+        t.finished.connect(lambda: self._threads.discard(t))
+        t.start()
+
     # ---------- data ----------
     def refresh(self):
         if self._closing:
@@ -363,31 +484,46 @@ class MainWindow(QMainWindow):
         self.status.setText("querying the VM…")
         self._fetcher = Fetcher()
         self._fetcher.got.connect(self._apply)
-        self._fetcher.start()
+        self._start(self._fetcher)
 
     def _apply(self, st: backend.State):
         if self._closing:
             return
+        was_running = self._vm_running
         self._vm_running = st.vm_running
+        if st.vm_running and not was_running:
+            # VM just came up (or app opened while it was already booting): start the
+            # watchdog grace so a slow boot is never mistaken for a hang.
+            self._vm_started_at = time.monotonic()
         if not st.ok:
             self._last_service = "Stopped"
             self.status.setText(f"● {st.error}")
+            # qemu alive but WMI still not answering = VM BOOTING (not off)
+            self._booting = bool(st.vm_running)
             if not st.vm_running:
                 self.nodeName.setText("VM is off")
                 self.nodeIp.setText("click power to turn on")
                 self.badge.setText("Off")
+                self.badge.setObjectName("badgeOff")
+                self.power.setPixmap(icons.power_pixmap(False, 48))
             else:
-                self.badge.setText("Offline")
-            self.badge.setObjectName("badgeOff")
+                self.nodeName.setText("Starting…")
+                self.nodeIp.setText("VM is booting, please wait")
+                self.badge.setText("Starting")
+                self.badge.setObjectName("badgeWarn")
+                self.power.setPixmap(icons.power_pixmap(True, 48))
             self.badge.setStyleSheet(QSS)
-            self.power.setPixmap(icons.power_pixmap(False, 48))
             self._sync_actions(False)
             self._update_tray()
-            self._relayout([])
+            self._clear_list()
+            # while booting, re-check faster so the switch to online feels live
+            # (auto mode only; in manual mode the user refreshes when they want)
+            if self._booting and not self._closing and self._auto:
+                QTimer.singleShot(5000, self.refresh)
             return
 
         self._last_service = st.service
-        # o nome que os peers veem e o Alias do Radmin, nao o hostname do Windows
+        # the name peers see is Radmin's Alias, not the Windows hostname
         self.nodeName.setText(st.alias or st.hostname or "—")
         self.nodeIp.setText(st.node_ip or "—")
         self._node_ip = st.node_ip
@@ -399,104 +535,175 @@ class MainWindow(QMainWindow):
         self._sync_actions(on)
         self._update_tray()
 
-        # descobre novos peers pelo ARP (a shim ja filtra 26.0.0.1)
+        # discover new peers via ARP (the shim already filters 26.0.0.1)
         for p in st.peers:
             if p.ip == "26.0.0.1":
                 continue
             self.roster.seen(p.ip, p.mac, p.host)
         self.roster.save()
 
-        # barra de redes (multiplas redes)
-        self._networks = list(st.networks)
-        self._update_netbar()
+        self._networks = list(st.networks)   # GUIDs the node is in (info only)
 
-        # liveness inicial = ARP; o ping_sweep refina logo em seguida
+        # initial liveness = ARP; the ping_sweep refines it right after
         active = {p.ip for p in st.peers if p.ip != "26.0.0.1"}
         self._render_peers(active)
-        self.ping_now()   # dispara liveness ativo
+        self.ping_now()   # kicks off active liveness
 
-        # 1a descoberta so agora, com a VM confirmada ligada e o servico no ar
+        # first discovery only now, with the VM confirmed on and the service up
         if getattr(self, "_want_discover", False) and on:
             self._want_discover = False
             QTimer.singleShot(3000, self.discover_now)
 
     def _render_peers(self, online_set):
-        rows = []
-        for ip in self.roster.all_ips():
-            if ip == self._node_ip or ip == "26.0.0.1":
-                continue   # nao lista o proprio no nem o gateway
-            rows.append((ip, ip in online_set))
-        rows.sort(key=lambda r: (not r[1], self.roster.label_of(r[0]).lower()))
-        self._relayout(rows)
-        nact = sum(1 for _, o in rows if o)
-        node = self.nodeIp.text()
-        self.status.setText(f"● {nact} online · {len(rows)} known · node {node}")
+        self._online = set(online_set)
+        self._rebuild_list()
 
-    # ---------- barra de redes (multiplas redes) ----------
-    def _update_netbar(self):
-        # limpa
-        while self.netbarLay.count():
-            it = self.netbarLay.takeAt(0)
-            if it.widget():
-                it.widget().deleteLater()
-        nets = self._networks
-        if len(nets) <= 1:
-            self.netbar.hide()   # 0 ou 1 rede: barra desnecessaria
-            self._selected_net = None
-            return
-        # chip "All" + um chip por rede
-        allsel = (self._selected_net is None)
-        chip = NetChip("*", f"All ({len(nets)})", allsel,
-                       self._select_net, lambda g: None)
-        self.netbarLay.addWidget(chip)
-        for g in nets:
-            c = NetChip(g, self.roster.net_label(g), self._selected_net == g,
-                        self._select_net, self._rename_net)
-            self.netbarLay.addWidget(c)
-        self.netbarLay.addStretch(1)
-        self.netbar.show()
-
-    def _select_net(self, guid):
-        self._selected_net = None if guid == "*" else guid
-        self._update_netbar()
-        # nota: filtrar peers por rede exige a associacao peer->rede, que so o
-        # protocolo Radmin tem. Por ora o chip destaca a rede; a lista permanece
-        # unificada (o Radmin roteia tudo junto na 26.0.0.0/8).
-        self.status.setText("● network: " + ("all" if self._selected_net is None
-                            else self.roster.net_label(self._selected_net)))
-
-    def _rename_net(self, guid):
-        cur = self.roster.net_label(guid)
-        text, ok = QInputDialog.getText(self, "Rename network",
-                                        "Name for this network:", text=cur)
-        if ok and text.strip():
-            self.roster.set_net_label(guid, text.strip())
-            self._update_netbar()
-
-    def _relayout(self, rows):
-        # limpa
+    def _clear_list(self):
         while self.listv.count() > 1:
-            item = self.listv.takeAt(0)
-            w = item.widget()
+            it = self.listv.takeAt(0); w = it.widget()
             if w:
                 w.deleteLater()
-        for ip, online in rows:
-            label = self.roster.label_of(ip)
-            self.listv.insertWidget(self.listv.count() - 1,
-                                    PeerRow(ip, label, online, self._rename))
+
+    def _rebuild_list(self):
+        """Render peers in collapsible per-network sections (manual grouping).
+        No user groups yet -> a plain flat list. Otherwise: one section per group
+        (in order) + an 'Unassigned' section, each collapsible. Honors the
+        Network > 'Show online only' filter."""
+        online = getattr(self, "_online", set())
+        online_only = bool(self.roster.get_setting("online_only", False))
+        peers = [ip for ip in self.roster.all_ips()
+                 if ip != self._node_ip and ip != "26.0.0.1"]
+        buckets: dict = {}
+        for ip in peers:
+            buckets.setdefault(self.roster.group_of(ip), []).append(ip)
+
+        def visible(ips):
+            ips = sorted(ips, key=lambda ip: (ip not in online, self.roster.label_of(ip).lower()))
+            if online_only:
+                ips = [ip for ip in ips if ip in online]
+            return ips
+
+        self._clear_list()
+        groups = self.roster.groups()
+        total = sum(len(visible(b)) for b in buckets.values())
+        shown = 0
+
+        if not groups:
+            # no groups: flat list (headers would be noise); create groups via ＋
+            for ip in visible(buckets.get(None, [])):
+                if shown >= MAX_ROWS:
+                    break
+                self._add_peer_row(ip, ip in online); shown += 1
+        else:
+            sections = [(g["id"], g["name"]) for g in groups]
+            if buckets.get(None):
+                sections.append((None, "Unassigned"))
+            for gid, gname in sections:
+                ips = visible(buckets.get(gid, []))
+                if online_only and not ips:
+                    continue   # when filtering, don't show empty network headers
+                key = gid or "__unassigned__"
+                collapsed = self.roster.is_collapsed(key)
+                hdr = NetHeader(gid, gname, len(ips), collapsed,
+                                self._toggle_group, self._group_menu)
+                self.listv.insertWidget(self.listv.count() - 1, hdr)
+                if collapsed:
+                    continue
+                for ip in ips:
+                    if shown >= MAX_ROWS:
+                        break
+                    self._add_peer_row(ip, ip in online); shown += 1
+
+        nact = sum(1 for ip in peers if ip in online)
+        node = self.nodeIp.text()
+        hidden = f" (+{total - shown} hidden)" if total > shown else ""
+        flt = " · online only" if online_only else ""
+        self.status.setText(f"● {nact} online · {len(peers)} known{flt}{hidden} · node {node}")
+
+    def _add_peer_row(self, ip, online):
+        label = self.roster.label_of(ip)
+        self.listv.insertWidget(self.listv.count() - 1,
+                                PeerRow(ip, label, online, self._rename, self._peer_menu))
+
+    # ---------- network groups (manual assignment) ----------
+    def _add_group(self):
+        text, ok = QInputDialog.getText(self, "New network", "Network name:")
+        if ok and text.strip():
+            self.roster.add_group(text.strip())
+            self._rebuild_list()
+
+    def _toggle_online_only(self, on: bool):
+        self.roster.set_setting("online_only", bool(on))
+        self._rebuild_list()
+
+    def _toggle_group(self, gid):
+        key = gid or "__unassigned__"
+        self.roster.set_collapsed(key, not self.roster.is_collapsed(key))
+        self._rebuild_list()
+
+    def _group_menu(self, gid, pos):
+        if gid is None:
+            return   # the Unassigned section has nothing to rename/delete
+        m = QMenu(self)
+        m.addAction("Rename…", lambda: self._rename_group(gid))
+        m.addAction("Delete network", lambda: self._delete_group(gid))
+        m.exec(pos)
+
+    def _rename_group(self, gid):
+        text, ok = QInputDialog.getText(self, "Rename network", "Network name:",
+                                        text=self.roster.group_name(gid))
+        if ok and text.strip():
+            self.roster.rename_group(gid, text.strip())
+            self._rebuild_list()
+
+    def _delete_group(self, gid):
+        from PySide6.QtWidgets import QMessageBox
+        r = QMessageBox.question(self, "Delete network",
+            f"Delete '{self.roster.group_name(gid)}'?\n"
+            "Its peers become Unassigned (they are not removed).")
+        if r == QMessageBox.Yes:
+            self.roster.remove_group(gid)
+            self._rebuild_list()
+
+    def _peer_menu(self, ip, pos):
+        m = QMenu(self)
+        m.addAction("Rename…", lambda: self._rename(ip))
+        move = m.addMenu("Move to network")
+        cur = self.roster.group_of(ip)
+        for g in self.roster.groups():
+            act = move.addAction(g["name"], lambda gid=g["id"]: self._move_peer(ip, gid))
+            act.setCheckable(True); act.setChecked(cur == g["id"])
+        move.addSeparator()
+        move.addAction("＋ New network…", lambda: self._move_to_new(ip))
+        if cur is not None:
+            m.addAction("Unassign", lambda: self._move_peer(ip, None))
+        m.exec(pos)
+
+    def _move_peer(self, ip, gid):
+        self.roster.assign(ip, gid)
+        self._rebuild_list()
+
+    def _move_to_new(self, ip):
+        text, ok = QInputDialog.getText(self, "New network", "Network name:")
+        if ok and text.strip():
+            gid = self.roster.add_group(text.strip())
+            self.roster.assign(ip, gid)
+            self._rebuild_list()
 
     def _rename(self, ip):
         cur = self.roster.name_of(ip)
-        text, ok = QInputDialog.getText(self, "Apelido do peer",
-                                        f"Nome para {ip}:", text=cur)
+        text, ok = QInputDialog.getText(self, "Peer nickname",
+                                        f"Name for {ip}:", text=cur)
         if ok:
             self.roster.set_name(ip, text.strip())
-            self._render_peers(set())
+            self._rebuild_list()
             self.ping_now()
 
-    # ---------- liveness (ping sweep do Linux) ----------
+    # ---------- liveness (ping sweep from Linux) ----------
     def ping_now(self):
-        if self._closing:
+        # with no VM on there is no mesh to ping: avoids the pointless sweep (and the
+        # background ping-process churn when the VM is off).
+        if self._closing or not self._vm_running:
             return
         if self._pinger and self._pinger.isRunning():
             return
@@ -505,7 +712,7 @@ class MainWindow(QMainWindow):
             return
         self._pinger = Pinger(ips)
         self._pinger.done.connect(self._apply_ping)
-        self._pinger.start()
+        self._start(self._pinger)
 
     def _apply_ping(self, result: dict):
         if self._closing:
@@ -513,7 +720,7 @@ class MainWindow(QMainWindow):
         online = {ip for ip, up in result.items() if up}
         self._render_peers(online)
 
-    # ---------- descoberta da lista completa (dump da GUI) ----------
+    # ---------- full-list discovery (GUI dump) ----------
     def discover_now(self):
         if self._closing or not self._vm_running:
             return
@@ -522,7 +729,7 @@ class MainWindow(QMainWindow):
         self.status.setText("● discovering network members…")
         self._discover = DiscoverWorker()
         self._discover.done.connect(self._apply_discover)
-        self._discover.start()
+        self._start(self._discover)
 
     def _apply_discover(self, peers: dict):
         if self._closing:
@@ -531,29 +738,44 @@ class MainWindow(QMainWindow):
             self.status.setText("● member sync failed (VM/dump)")
             return
         novos = self.roster.ingest(peers)
-        self._render_peers(set())
+        self._rebuild_list()
         self.ping_now()
         self.status.setText(f"● {len(peers)} members synced ({novos} new)")
 
-    # ---------- health / auto-heal (silencioso, em background) ----------
+    # ---------- health / auto-heal (silent, in the background) ----------
     def health_now(self):
         if self._closing or self._busy:
             return
-        # watchdog: processo vivo mas VM travada (nao responde) -> recupera
-        if vmctl.is_running() and not vmctl.is_responsive():
-            self.status.setText("● VM unresponsive — recovering…")
-            self._busy = True
-            self._action = ActionWorker(lambda: (vmctl.recover() != "ok", "watchdog"))
-            self._action.done.connect(lambda ok, log: self._vm_action_done("Recovering VM"))
-            self._action.start()
-            return
-        if not self._vm_running:
+        # --- watchdog: restart ONLY a genuinely wedged VM, never during boot ---
+        # A slow Windows boot looks "unresponsive" too, so guard hard: skip while
+        # booting, skip during the post-power-on grace, and require several
+        # consecutive unresponsive cycles before touching the VM. Otherwise the
+        # watchdog kept force-restarting the booting VM in a loop (spurious reboots
+        # + a pile of preflight/wmiexec python + a kill -9 freeze).
+        if vmctl.is_running():
+            in_grace = (time.monotonic() - self._vm_started_at) < WATCHDOG_GRACE_S
+            if not self._booting and not in_grace and not vmctl.is_responsive():
+                self._unresponsive_strikes += 1
+            else:
+                self._unresponsive_strikes = 0
+            if self._unresponsive_strikes >= WATCHDOG_STRIKES:
+                self._unresponsive_strikes = 0
+                self.status.setText("● VM unresponsive — recovering…")
+                self._busy = True
+                self._action = ActionWorker(lambda: (vmctl.recover() != "ok", "watchdog"))
+                self._action.done.connect(lambda ok, log: self._vm_action_done("Recovering VM"))
+                self._start(self._action)
+                return
+        else:
+            self._unresponsive_strikes = 0
+        # normal auto-heal: only when the VM is really up (WMI answering), not booting
+        if not self._vm_running or self._booting:
             return
         if self._health and self._health.isRunning():
             return
-        self._health = HealthWorker(heal=True)   # sempre cura no ciclo automatico
+        self._health = HealthWorker(heal=True)   # always heal in the automatic cycle
         self._health.done.connect(self._apply_health)
-        self._health.start()
+        self._start(self._health)
 
     def _apply_health(self, res: dict):
         if self._closing:
@@ -561,14 +783,14 @@ class MainWindow(QMainWindow):
         self._last_health = res
         if res.get("error"):
             return
-        # se algo foi curado, avisa discretamente na barra
+        # if something was healed, note it discreetly in the status bar
         if res.get("healed"):
             healed = [c["name"] for c in res.get("checks", []) if c.get("healed")]
             self.status.setText("● auto-repaired: " + ", ".join(healed))
             QTimer.singleShot(1000, self.refresh)
 
     def do_health(self):
-        # diagnostico manual com relatorio visivel
+        # manual diagnostics with a visible report
         if self._busy:
             return
         self._busy = True
@@ -576,7 +798,7 @@ class MainWindow(QMainWindow):
         self._sync_actions(self._last_service == "Running")
         self._health = HealthWorker(heal=True)
         self._health.done.connect(self._health_report)
-        self._health.start()
+        self._start(self._health)
 
     def _health_report(self, res: dict):
         from PySide6.QtWidgets import QMessageBox
@@ -627,7 +849,7 @@ class MainWindow(QMainWindow):
         self._sync_actions(self._last_service == "Running")
         self._action = ActionWorker(fn)
         self._action.done.connect(lambda ok, log: self._action_done(ok, log, label))
-        self._action.start()
+        self._start(self._action)
 
     def _action_done(self, ok, log, label):
         if self._closing:
@@ -640,7 +862,7 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(1500, self.refresh)
 
     def toggle_power(self):
-        # o power da UI liga/desliga a VM INTEIRA (Radmin Linux = a VM)
+        # the UI power button turns the WHOLE VM on/off (Radmin Linux = the VM)
         if self._busy:
             return
         if self._vm_running:
@@ -648,17 +870,18 @@ class MainWindow(QMainWindow):
         else:
             self.do_vm_on()
 
-    # ---------- controle da VM inteira ----------
+    # ---------- whole-VM control ----------
     def do_vm_on(self):
         if self._busy or self._vm_running:
             return
         self._busy = True
+        self._vm_started_at = time.monotonic()   # start the watchdog grace now
         self.status.setText("● turning VM on…")
         self.nodeName.setText("starting…")
         self._sync_actions(False)
-        self._action = ActionWorker(lambda: (vmctl.power_on(), "ligada"))
-        self._action.done.connect(lambda ok, log: self._vm_action_done("Ligando"))
-        self._action.start()
+        self._action = ActionWorker(lambda: (vmctl.power_on(), "on"))
+        self._action.done.connect(lambda ok, log: self._vm_action_done("Turning on"))
+        self._start(self._action)
 
     def do_vm_off(self):
         from PySide6.QtWidgets import QMessageBox
@@ -671,9 +894,9 @@ class MainWindow(QMainWindow):
         self._busy = True
         self.status.setText("● turning VM off…")
         self._sync_actions(True)
-        self._action = ActionWorker(lambda: (vmctl.power_off(), "desligada"))
-        self._action.done.connect(lambda ok, log: self._vm_action_done("Desligando"))
-        self._action.start()
+        self._action = ActionWorker(lambda: (vmctl.power_off(), "off"))
+        self._action.done.connect(lambda ok, log: self._vm_action_done("Turning off"))
+        self._start(self._action)
 
     def _vm_action_done(self, label):
         if self._closing:
@@ -681,11 +904,11 @@ class MainWindow(QMainWindow):
         self._busy = False
         self.status.setText(f"● {label}: ok")
         self._sync_actions(False)
-        # ligar demora ~90s p/ o WMI responder; o refresh normal (30s) recupera,
-        # mas dispara um cedo p/ atualizar o estado da VM (on/off)
+        # powering on takes ~90s for WMI to answer; the normal 30s refresh recovers,
+        # but fire one early to update the VM state (on/off)
         QTimer.singleShot(4000, self.refresh)
 
-    # ---------- agente / automacao ----------
+    # ---------- agent / automation ----------
     def do_check_update(self):
         if self._busy:
             return
@@ -694,7 +917,7 @@ class MainWindow(QMainWindow):
         self._sync_actions(self._last_service == "Running")
         self._action = ActionWorker(lambda: (agent.check_update(install=False), ""))
         self._action.done.connect(self._update_checked)
-        self._action.start()
+        self._start(self._action)
 
     def _update_checked(self, res, _log):
         from PySide6.QtWidgets import QMessageBox
@@ -713,7 +936,7 @@ class MainWindow(QMainWindow):
                 f"Installed: {cur}\nAvailable: {lat}\n\nInstall now on the VM?")
             if r == QMessageBox.Yes:
                 self._run_action(lambda: (agent.check_update(install=True).get("did_install", False), ""),
-                                 "Atualizando Radmin")
+                                 "Updating Radmin")
             else:
                 self.status.setText(f"● {cur} ({lat} available)")
         else:
@@ -742,17 +965,17 @@ class MainWindow(QMainWindow):
             subprocess.run(["bash", deploy], capture_output=True, timeout=120)
             out = agent._run_file(r"C:\radmin-agent\agent-install.ps1", 90)
             return ("<<<AGENTOK>>>" in out), out
-        self._run_action(_go, "Instalando agente")
+        self._run_action(_go, "Installing agent")
 
     def do_connect(self):
-        self._run_action(actions.connect, "Conectando")
+        self._run_action(actions.connect, "Connecting")
 
     def do_disconnect(self):
         from PySide6.QtWidgets import QMessageBox
         r = QMessageBox.question(self, "Disconnect",
             "Disconnect from Radmin VPN?\nPeers will be unreachable until you reconnect.")
         if r == QMessageBox.Yes:
-            self._run_action(actions.disconnect, "Desconectando")
+            self._run_action(actions.disconnect, "Disconnecting")
 
     def do_leave(self):
         from PySide6.QtWidgets import QMessageBox
@@ -760,7 +983,7 @@ class MainWindow(QMainWindow):
         if not guids:
             QMessageBox.information(self, "Leave network", "No associated network found.")
             return
-        # se houver mais de uma, pergunta qual
+        # if more than one, ask which
         if len(guids) == 1:
             guid = guids[0]
         else:
@@ -771,7 +994,7 @@ class MainWindow(QMainWindow):
         r = QMessageBox.question(self, "Leave network",
             f"Remove the network association\n{guid}?\n\nYou will need to join again with name and password.")
         if r == QMessageBox.Yes:
-            self._run_action(lambda: actions.leave_network(guid), "Saindo da rede")
+            self._run_action(lambda: actions.leave_network(guid), "Leaving network")
 
     def do_join(self):
         self._open_gui_for("join a network")
@@ -814,7 +1037,9 @@ class MainWindow(QMainWindow):
             "Front-end that drives the real Radmin VPN running headless on a\n"
             "Windows 7 VM, over WMI. The power button turns the whole VM on/off;\n"
             "peers come live from the mesh; the VM self-heals in the background.\n"
-            "Active peers via ARP/ping; nicknames are local.")
+            "Active peers via ARP/ping; nicknames are local.\n\n"
+            f"Tiny footprint: the VM uses only {config.VM_RAM} MB RAM · {config.VM_SMP} CPU, "
+            "so it never hogs your machine.")
 
     def _show_raise(self):
         self.showNormal(); self.raise_(); self.activateWindow()
@@ -827,7 +1052,7 @@ class MainWindow(QMainWindow):
                 self._show_raise()
 
     def closeEvent(self, e):
-        # fecha p/ tray em vez de sair
+        # close to tray instead of quitting
         if self.tray.isVisible():
             e.ignore(); self.hide()
 
@@ -836,20 +1061,19 @@ class MainWindow(QMainWindow):
         self.timer.stop()
         self.pingtimer.stop()
         self.healthtimer.stop()
-        # mata subprocessos externos (wmiexec/ping/dump) para os workers saírem
+        # 1) cancel and KILL every tracked subprocess (wmiexec/ping/dump/agent):
+        #    this immediately unblocks the worker threads stuck in communicate()/ping,
+        #    which then return on their own.
         import backend
-        for p in list(getattr(backend, "_LIVE_PROCS", ())):
-            try: p.kill()
-            except Exception: pass  # noqa
-        # espera cada QThread filho um tempo curto; se nao sair, termina a força
-        # (melhor terminar do que deixar o Qt abortar com qFatal no finalize)
-        from PySide6.QtCore import QThread as _QT
-        for t in self.findChildren(_QT):
+        backend.cancel_all()
+        # 2) wait for each worker to finish. With the children killed, wait() returns
+        #    quickly. NO terminate(): killing a QThread mid-Python is what made Qt
+        #    abort (qFatal) during finalize. The QThreads are not Qt children of the
+        #    window; that is why we track them in self._threads (findChildren missed them).
+        for t in list(self._threads):
             try:
                 if t.isRunning():
-                    if not t.wait(4000):
-                        t.terminate()
-                        t.wait(1000)
+                    t.wait(5000)
             except RuntimeError:
                 pass
 

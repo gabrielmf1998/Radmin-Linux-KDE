@@ -1,10 +1,10 @@
 """
-vmctl.py - controla a VM inteira do lado Linux (nao o Radmin, a maquina).
-Para o usuario da UI fake, "ligar/desligar Radmin Linux" = ligar/desligar a VM.
-Usa o monitor do QEMU (socket) e os scripts da bancada.
+vmctl.py - controls the whole VM from the Linux side (not Radmin, the machine).
+For the user of the fake UI, "turn Radmin Linux on/off" = turn the VM on/off.
+Uses the QEMU monitor (socket) and the bench scripts.
 """
 from __future__ import annotations
-import os, socket, subprocess, time
+import os, socket, subprocess, time, signal
 
 import config
 VMDIR = config.VMDIR
@@ -25,7 +25,7 @@ def is_running() -> bool:
 
 
 def _monitor(cmd: str, timeout: float = 8) -> str:
-    """Manda um comando ao monitor do QEMU e devolve a resposta."""
+    """Send a command to the QEMU monitor and return the reply."""
     if not os.path.exists(MONITOR):
         return ""
     try:
@@ -44,7 +44,7 @@ def _monitor(cmd: str, timeout: float = 8) -> str:
 
 
 def power_off(timeout: int = 60) -> bool:
-    """Desliga a VM (ACPI). Espera ela sair de verdade."""
+    """Shut the VM down (ACPI). Wait for it to actually exit."""
     if not is_running():
         return True
     _monitor("system_powerdown")
@@ -59,23 +59,41 @@ def power_off(timeout: int = 60) -> bool:
         except OSError:
             return True
         time.sleep(1)
-    return False  # nao desligou no prazo
+    return False  # did not shut down in time
 
 
 def power_off_hard() -> bool:
-    """Ultimo recurso: mata o processo do QEMU."""
+    """Last resort: stop the QEMU process. Uses SIGTERM (qemu shuts down in an
+    orderly way and flushes its block cache), escalating to SIGKILL only if it
+    refuses to exit. NEVER start with kill -9: it dumps GBs of dirty pages at once
+    and freezes the host."""
     try:
         with open(PIDFILE) as f:
             pid = int(f.read().strip())
-        os.kill(pid, 9)
-        os.remove(PIDFILE)
-        return True
     except (OSError, ValueError, FileNotFoundError):
         return True
+    try:
+        os.kill(pid, signal.SIGTERM)
+        for _ in range(30):            # up to ~15s for an orderly exit
+            time.sleep(0.5)
+            try:
+                os.kill(pid, 0)
+            except OSError:
+                break
+        else:
+            os.kill(pid, signal.SIGKILL)   # truly stuck; absolute last resort
+            time.sleep(1)
+    except OSError:
+        pass
+    try:
+        os.remove(PIDFILE)
+    except OSError:
+        pass
+    return True
 
 
 def power_on() -> bool:
-    """Liga a VM via preflight (que auto-repara a pilha)."""
+    """Start the VM via preflight (which auto-repairs the stack)."""
     if is_running():
         return True
     try:
@@ -87,12 +105,13 @@ def power_on() -> bool:
 
 
 def is_responsive(timeout: float = 3) -> bool:
-    """A VM responde na rede? (ping ao host da VM)."""
+    """Does the VM answer on the network? (ICMP to the VM host, PROCESS-FREE).
+    Uses the unprivileged-ICMP sweep so it never spawns a ping process nor blocks
+    the UI thread on a subprocess."""
     host = HOST_IP()
     try:
-        r = subprocess.run(["ping", "-c1", "-W", str(int(timeout)), host],
-                           capture_output=True, timeout=timeout + 2)
-        return r.returncode == 0
+        import actions
+        return bool(actions.ping_sweep([host]).get(host, False))
     except Exception:  # noqa
         return False
 
@@ -103,14 +122,14 @@ def HOST_IP() -> str:
 
 
 def recover() -> str:
-    """Watchdog: se o processo esta vivo mas a VM nao responde (travada),
-    forca desligar e religar. Retorna o que fez."""
+    """Watchdog: if the process is alive but the VM does not answer (hung),
+    force a power off and back on. Returns what it did."""
     if not is_running():
         power_on()
         return "started"
     if is_responsive():
         return "ok"
-    # processo vivo mas sem resposta = travada
+    # process alive but no reply = hung
     if not power_off(timeout=30):
         power_off_hard()
     power_on()
@@ -124,8 +143,8 @@ if __name__ == "__main__":
         if a == "status":
             print("running" if is_running() else "stopped")
         elif a == "off":
-            print("off ok" if power_off() else "off falhou")
+            print("off ok" if power_off() else "off failed")
         elif a == "on":
-            print("on ok" if power_on() else "on falhou")
+            print("on ok" if power_on() else "on failed")
     else:
-        print("uso: vmctl.py status|on|off")
+        print("usage: vmctl.py status|on|off")

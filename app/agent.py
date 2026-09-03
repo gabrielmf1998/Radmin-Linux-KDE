@@ -3,7 +3,7 @@ agent.py - dispara os scripts do agente na VM e le status/updates.
 Cada funcao roda um .ps1 de C:\\radmin-agent via WMI e devolve o resultado.
 """
 from __future__ import annotations
-import base64, json, re, subprocess
+import base64, json, re
 import backend
 
 import config
@@ -17,18 +17,19 @@ def _run_file(ps_path: str, timeout: int = 90) -> str:
         f"{backend.WMIEXEC} -shell-type powershell {backend.TARGET} "
         f'"powershell -ExecutionPolicy Bypass -File {ps_path}"'
     )
-    try:
-        out = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
-        return out.stdout + out.stderr
-    except subprocess.TimeoutExpired:
+    rc, blob = backend.run_capture(cmd, timeout, shell=True)
+    if rc == 124:
         return "timeout"
-    except Exception as e:  # noqa
-        return f"erro: {e}"
+    if rc == 255:
+        return blob or "cancelado"
+    return blob
 
 
 def orchestrate_net(timeout: int = 120) -> tuple[bool, str]:
     out = _run_file(rf"{AGENT_DIR}\net-orchestrator.ps1", timeout)
-    return ("conectividade pronta" in out), out
+    # accept the English marker, and the legacy pt-BR one until the VM agent is redeployed
+    ok = ("connectivity ready" in out) or ("conectividade pronta" in out)
+    return ok, out
 
 
 def power_guard(timeout: int = 60) -> tuple[bool, str]:
@@ -42,11 +43,9 @@ def check_update(install: bool = False, timeout: int = 300) -> dict:
         f"{backend.WMIEXEC} -shell-type powershell {backend.TARGET} "
         f'"powershell -ExecutionPolicy Bypass -File {AGENT_DIR}\\radmin-update.ps1 {flag}"'
     )
-    try:
-        out = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
-        blob = out.stdout + out.stderr
-    except Exception as e:  # noqa
-        return {"error": str(e)}
+    rc, blob = backend.run_capture(cmd, timeout, shell=True)
+    if rc in (124, 255):
+        return {"error": "timeout" if rc == 124 else "cancelado"}
     m = _UPD_RE.search(blob)
     if not m:
         return {"error": "sem resposta do updater"}
@@ -63,11 +62,10 @@ def health(heal: bool = False, timeout: int = 120) -> dict:
         f"{backend.WMIEXEC} -shell-type powershell {backend.TARGET} "
         f'"powershell -ExecutionPolicy Bypass -File {AGENT_DIR}\\health.ps1 {flag}"'
     )
-    try:
-        out = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
-        blob = out.stdout + out.stderr
-    except Exception as e:  # noqa
-        return {"error": str(e), "all_ok": False, "checks": []}
+    rc, blob = backend.run_capture(cmd, timeout, shell=True)
+    if rc in (124, 255):
+        msg = "timeout" if rc == 124 else "cancelado"
+        return {"error": msg, "all_ok": False, "checks": []}
     m = _HEALTH_RE.search(blob)
     if not m:
         return {"error": "sem resposta do health", "all_ok": False, "checks": []}
@@ -85,11 +83,8 @@ def agent_installed(timeout: int = 40) -> bool:
         f"{backend.WMIEXEC} -shell-type powershell {backend.TARGET} "
         f'"powershell -EncodedCommand {b64}"'
     )
-    try:
-        out = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
-        return "SIM" in (out.stdout + out.stderr)
-    except Exception:  # noqa
-        return False
+    rc, blob = backend.run_capture(cmd, timeout, shell=True)
+    return "SIM" in blob
 
 
 if __name__ == "__main__":
@@ -100,6 +95,6 @@ if __name__ == "__main__":
     elif a == "power":
         ok, log = power_guard(); print("power ok:", ok)
     elif a == "installed":
-        print("agente instalado:", agent_installed())
+        print("agent installed:", agent_installed())
     else:
         print(check_update(install=False))

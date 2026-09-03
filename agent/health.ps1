@@ -1,8 +1,8 @@
 # ============================================================
-#  health.ps1 - diagnostico + auto-reparo do lado Windows.
-#  Checa cada componente e (se -Heal) conserta. Devolve JSON.
-#  O "portal" (UI) usa isso p/ nunca precisar olhar a VM.
-#  Saida entre <<<HEALTH>>> e <<<END>>>.
+#  health.ps1 - diagnostics + auto-repair on the Windows side.
+#  Checks each component and (if -Heal) fixes it. Returns JSON.
+#  The "portal" (UI) uses this so you never need to look at the VM.
+#  Output between <<<HEALTH>>> and <<<END>>>.
 # ============================================================
 param([switch]$Heal)
 $ErrorActionPreference = "SilentlyContinue"
@@ -11,12 +11,12 @@ $ISO_MAC = "525400260002"
 function Log($m){ $ts=Get-Date -Format "HH:mm:ss"; Add-Content $LOG "[$ts] $m" }
 function J($s){ if($null -eq $s){'null'}else{'"'+(([string]$s).Replace('\','\\').Replace('"','\"'))+'"'} }
 
-$checks = @()   # cada item: name, ok, detail, healed
+$checks = @()   # each item: name, ok, detail, healed
 function Check($name, $ok, $detail, $healed){
   $script:checks += @{ name=$name; ok=$ok; detail=$detail; healed=$healed }
 }
 
-# --- 1. servico RvControlSvc ---
+# --- 1. RvControlSvc service ---
 $svc = Get-Service RvControlSvc
 $svcOk = ($svc.Status -eq "Running")
 $svcHealed = $false
@@ -27,7 +27,7 @@ if(-not $svcOk -and $Heal){
 }
 Check "radmin_service" $svcOk $svc.Status $svcHealed
 
-# --- 2. IP na mesh (placa Radmin com 26.x) ---
+# --- 2. mesh IP (Radmin adapter with 26.x) ---
 $rad = Get-WmiObject Win32_NetworkAdapterConfiguration | Where-Object { $_.Description -match "Radmin" -and $_.IPAddress }
 $radIp = $null
 if($rad){ $radIp = $rad.IPAddress | Where-Object { $_ -like "26.*" } | Select-Object -First 1 }
@@ -51,7 +51,7 @@ foreach($c in $share.EnumEveryConnection){
 $icsOk = ($radPub -and $isoPriv)
 $icsHealed=$false
 if(-not $icsOk -and $Heal -and $radName -and $isoName){
-  Log "healing: reaplica ICS"
+  Log "healing: reapply ICS"
   foreach($c in $share.EnumEveryConnection){ $cfg=$share.INetSharingConfigurationForINetConnection($c); if($cfg.SharingEnabled){$cfg.DisableSharing()} }
   Start-Sleep 2
   foreach($c in $share.EnumEveryConnection){ $p=$share.NetConnectionProps($c); if($p.Name -eq $radName){ $share.INetSharingConfigurationForINetConnection($c).EnableSharing(0) } }
@@ -62,13 +62,13 @@ if(-not $icsOk -and $Heal -and $radName -and $isoName){
 }
 Check "ics" $icsOk "radPub=$radPub isoPriv=$isoPriv" $icsHealed
 
-# --- 4. IP da placa isolada (192.168.137.1) ---
+# --- 4. isolated adapter IP (192.168.137.1) ---
 $iso = Get-WmiObject Win32_NetworkAdapterConfiguration | Where-Object { $_.MACAddress -eq "52:54:00:26:00:02" -and $_.IPAddress }
 $isoIp = $null
 if($iso){ $isoIp = $iso.IPAddress | Where-Object { $_ -like "192.168.137.*" } | Select-Object -First 1 }
 Check "isolated_ip" ([bool]$isoIp) $isoIp $false
 
-# --- 5. energia travada (proxy robusto: hibernacao off = power-guard aplicou) ---
+# --- 5. power locked (robust proxy: hibernation off = power-guard applied) ---
 $powerOk = -not (Test-Path "C:\hiberfil.sys")
 $powerHealed=$false
 if(-not $powerOk -and $Heal){
@@ -82,11 +82,11 @@ if(-not $powerOk -and $Heal){
 }
 Check "power_guard" $powerOk "hibernate off" $powerHealed
 
-# --- 6. tarefas do agente registradas ---
+# --- 6. agent tasks registered ---
 $t = schtasks /query /tn "RadminAgent-Net" 2>$null
 Check "agent_tasks" ([bool]$t) "RadminAgent-Net" $false
 
-# monta JSON
+# build JSON
 $allOk = $true
 $items = @()
 foreach($ch in $checks){

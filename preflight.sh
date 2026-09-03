@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # ============================================================
-#  preflight.sh - verifica e auto-repara a pilha antes de abrir a UI.
-#  Camadas, de baixo pra cima:
+#  preflight.sh - checks and auto-repairs the stack before opening the UI.
+#  Layers, bottom to top:
 #    1. venv (impacket + PySide6)
-#    2. interface tapradmin (NetworkManager)          -> nmcli con up
-#    3. DHCP na tap (so quando NAO em modo ICS)        -> systemctl
-#    4. VM ntlite-bench ligada                         -> bench-run.sh
-#    5. VM alcancavel na rede (ping)
-#    6. WMI responde (SMB/credencial)
-#    7. shim presente em C:\radmin-shim.ps1           -> deploy-shim.sh
-#  Sai 0 se tudo pronto; imprime cada passo. Use -q p/ so erros.
+#    2. tapradmin interface (NetworkManager)          -> nmcli con up
+#    3. DHCP on the tap (only when NOT in ICS mode)    -> systemctl
+#    4. ntlite-bench VM up                             -> bench-run.sh
+#    5. VM reachable on the network (ping)
+#    6. WMI answers (SMB/credential)
+#    7. shim present at C:\radmin-shim.ps1            -> deploy-shim.sh
+#  Exits 0 if everything is ready; prints each step. Use -q for errors only.
 # ============================================================
 set -uo pipefail
 
@@ -22,7 +22,7 @@ DHCP_SVC="$RADMIN_DHCP_SVC"
 QUIET=0; LIGHT=0
 for a in "$@"; do
   [[ "$a" == "-q" ]] && QUIET=1
-  [[ "$a" == "--light" ]] && LIGHT=1   # so prepara venv+tap+DHCP; NAO liga a VM
+  [[ "$a" == "--light" ]] && LIGHT=1   # only prepares venv+tap+DHCP; does NOT start the VM
 done
 ok(){ [[ $QUIET -eq 0 ]] && echo "  [ok] $*"; }
 fix(){ echo "  [fix] $*"; }
@@ -43,57 +43,57 @@ fi
 # 2. interface tap ----------------------------------------------------
 step "2/7 interface $TAP"
 if ip link show "$TAP" >/dev/null 2>&1; then
-  ok "$TAP existe"
+  ok "$TAP exists"
 else
-  fix "subindo conexao $NMCON"
+  fix "bringing up connection $NMCON"
   nmcli con up "$NMCON" >/dev/null 2>&1
   sleep 2
-  if ip link show "$TAP" >/dev/null 2>&1; then ok "$TAP no ar"; else err "nao consegui criar $TAP"; FAIL=1; fi
+  if ip link show "$TAP" >/dev/null 2>&1; then ok "$TAP up"; else err "could not create $TAP"; FAIL=1; fi
 fi
 
-# 3. DHCP (so se a tap estiver em modo /8, i.e. bridge L2; em ICS a VM serve) --
-step "3/7 DHCP da tap"
+# 3. DHCP (only if the tap is in /8 mode, i.e. L2 bridge; in ICS the VM serves it) --
+step "3/7 tap DHCP"
 TAP_IP="$(ip -4 -o addr show "$TAP" 2>/dev/null | awk '{print $4}')"
 if [[ "$TAP_IP" == 26.* ]]; then
-  if systemctl is-active --quiet "$DHCP_SVC"; then ok "$DHCP_SVC ativo (modo bridge)"
-  else fix "iniciando $DHCP_SVC"; systemctl start "$DHCP_SVC" 2>/dev/null || pkexec systemctl start "$DHCP_SVC"; fi
+  if systemctl is-active --quiet "$DHCP_SVC"; then ok "$DHCP_SVC active (bridge mode)"
+  else fix "starting $DHCP_SVC"; systemctl start "$DHCP_SVC" 2>/dev/null || pkexec systemctl start "$DHCP_SVC"; fi
 else
-  ok "modo ICS/NAT ($TAP_IP) — DHCP fica na VM, nada a fazer"
+  ok "ICS/NAT mode ($TAP_IP) — DHCP stays in the VM, nothing to do"
 fi
 
-# modo --light: para aqui. Prepara a pilha (venv+tap+DHCP) mas NAO liga a VM
-# nem espera boot/WMI. A UI abre na hora; a VM so liga quando o usuario mandar.
+# --light mode: stop here. Prepares the stack (venv+tap+DHCP) but does NOT start the
+# VM nor wait for boot/WMI. The UI opens immediately; the VM only starts on request.
 if [[ $LIGHT -eq 1 ]]; then
-  [[ $FAIL -eq 0 ]] && { [[ $QUIET -eq 0 ]] && echo ">> pilha preparada (modo leve; VM nao ligada)."; exit 0; }
-  err "preparo leve incompleto"; exit 1
+  [[ $FAIL -eq 0 ]] && { [[ $QUIET -eq 0 ]] && echo ">> stack prepared (light mode; VM not started)."; exit 0; }
+  err "light preparation incomplete"; exit 1
 fi
 
-# 4. VM ligada --------------------------------------------------------
-# Nuance: se a tap foi recriada (NO-CARRIER) com a VM viva, o QEMU ficou preso
-# no device tun antigo -> a VM precisa reiniciar p/ reatar na nova tap.
-step "4/7 VM ntlite-bench"
+# 4. VM up ------------------------------------------------------------
+# Nuance: if the tap was recreated (NO-CARRIER) with the VM alive, QEMU stayed pinned
+# to the old tun device -> the VM must restart to reattach to the new tap.
+step "4/7 ntlite-bench VM"
 vm_alive(){ [[ -f "$VMDIR/qemu.pid" ]] && kill -0 "$(cat "$VMDIR/qemu.pid")" 2>/dev/null; }
 tap_carrier(){ ip link show "$TAP" 2>/dev/null | grep -q 'LOWER_UP'; }
 start_vm(){ ( cd "$VMDIR" && setsid nohup ./bench-run.sh >/dev/null 2>&1 < /dev/null & ); }
 
 if vm_alive && ! tap_carrier; then
-  fix "VM viva mas $TAP sem carrier — reiniciando a VM p/ reatar"
+  fix "VM alive but $TAP has no carrier — restarting the VM to reattach"
   ( cd "$VMDIR" && ./bench-stop.sh >/dev/null 2>&1 )
-  sleep 2; start_vm; ok "VM reiniciada — aguardando boot"
+  sleep 2; start_vm; ok "VM restarted — waiting for boot"
 elif vm_alive; then
-  ok "VM rodando (pid $(cat "$VMDIR/qemu.pid"))"
+  ok "VM running (pid $(cat "$VMDIR/qemu.pid"))"
 else
-  fix "ligando a VM (headless)"; start_vm; ok "VM iniciada — aguardando boot"
+  fix "starting the VM (headless)"; start_vm; ok "VM started — waiting for boot"
 fi
 
-# 5. VM alcancavel ----------------------------------------------------
-step "5/7 rede ($TARGET_HOST)"
+# 5. VM reachable -----------------------------------------------------
+step "5/7 network ($TARGET_HOST)"
 REACH=0
 for i in $(seq 1 30); do
-  if ping -c1 -W1 "$TARGET_HOST" >/dev/null 2>&1; then REACH=1; break; fi
+  if ping -n -c1 -W1 "$TARGET_HOST" >/dev/null 2>&1; then REACH=1; break; fi
   sleep 3
 done
-if [[ $REACH -eq 1 ]]; then ok "$TARGET_HOST responde"; else err "VM inalcancavel apos 90s"; FAIL=1; fi
+if [[ $REACH -eq 1 ]]; then ok "$TARGET_HOST responds"; else err "VM unreachable after 90s"; FAIL=1; fi
 
 # 6. WMI + 7. shim ----------------------------------------------------
 if [[ $FAIL -eq 0 ]]; then
@@ -104,9 +104,9 @@ if [[ $FAIL -eq 0 ]]; then
          "powershell -Command exit" >/dev/null 2>&1; then WOK=1; break; fi
     sleep 6
   done
-  if [[ $WOK -eq 1 ]]; then ok "WMI autentica e executa"; else err "WMI nao respondeu (VM ainda bootando? UAC?)"; FAIL=1; fi
+  if [[ $WOK -eq 1 ]]; then ok "WMI authenticates and runs"; else err "WMI did not answer (VM still booting? UAC?)"; FAIL=1; fi
 
-  step "7/7 shim na VM"
+  step "7/7 shim in the VM"
   HAS=$("$VENV/bin/python" - <<PY 2>/dev/null
 from impacket.smbconnection import SMBConnection
 try:
@@ -118,15 +118,15 @@ try:
 except Exception: print("err")
 PY
 )
-  if [[ "$HAS" == "yes" ]]; then ok "C:\\radmin-shim.ps1 presente"
-  else fix "enviando a shim"; "$SELF/deploy-shim.sh" >/dev/null 2>&1 && ok "shim enviada" || { err "falha ao enviar a shim"; FAIL=1; }
+  if [[ "$HAS" == "yes" ]]; then ok "C:\\radmin-shim.ps1 present"
+  else fix "sending the shim"; "$SELF/deploy-shim.sh" >/dev/null 2>&1 && ok "shim sent" || { err "failed to send the shim"; FAIL=1; }
   fi
 fi
 
 if [[ $FAIL -eq 0 ]]; then
-  [[ $QUIET -eq 0 ]] && echo ">> pilha pronta."
+  [[ $QUIET -eq 0 ]] && echo ">> stack ready."
   exit 0
 else
-  err "preflight incompleto — ver acima."
+  err "preflight incomplete — see above."
   exit 1
 fi
