@@ -11,8 +11,10 @@ set -euo pipefail
 
 REPO="${RADMIN_REPO:-gabrielmf1998/Radmin-Linux-KDE}"
 BRANCH="${RADMIN_BRANCH:-main}"
-# the VM image (large) comes from a release; override with RADMIN_VM_URL
-VM_URL="${RADMIN_VM_URL:-https://github.com/$REPO/releases/latest/download/radmin-linux-base.qcow2.zst}"
+# The VM image (~3 GB) is SPLIT into <2 GB parts on the release (GitHub caps release
+# assets at 2 GB); we download the parts and concatenate them. Override with a single
+# local file via RADMIN_VM_IMAGE, or a single URL via RADMIN_VM_URL.
+BASE_URL="https://github.com/$REPO/releases/latest/download"
 DEST="${RADMIN_HOME:-$HOME/.local/share/radmin-linux}"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
@@ -36,8 +38,24 @@ elif [[ -f "$DEST/vm/bench.qcow2" ]]; then
   say "VM image already installed; reusing"
 else
   say "Downloading the VM base image (large, may take a while)"
-  if get "$VM_URL" "$WORK/vm.qcow2.zst"; then
-    IMG_ARG="$WORK/vm.qcow2.zst"
+  OUT="$WORK/vm.qcow2.zst"
+  if [[ -n "${RADMIN_VM_URL:-}" ]]; then
+    get "$RADMIN_VM_URL" "$OUT" || OUT=""              # single-URL override
+  else
+    : > "$OUT"; ok=0
+    for suf in aa ab ac ad ae af ag ah; do            # concatenate the split parts
+      p="radmin-linux-base.qcow2.zst.part-$suf"
+      if get "$BASE_URL/$p" "$WORK/$p" 2>/dev/null; then
+        cat "$WORK/$p" >> "$OUT"; rm -f "$WORK/$p"; ok=1
+      else
+        break
+      fi
+    done
+    # fallback: a single, non-split asset (if it ever fits under 2 GB)
+    [[ $ok -eq 0 ]] && { get "$BASE_URL/radmin-linux-base.qcow2.zst" "$OUT" || OUT=""; }
+  fi
+  if [[ -n "$OUT" && -s "$OUT" ]]; then
+    IMG_ARG="$OUT"
   else
     say "Could not download the image automatically."
     say "Run later: $DEST/install.sh /path/to/radmin-linux-base.qcow2.zst"
