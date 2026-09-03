@@ -12,7 +12,7 @@ per-component architecture.
 Works on **any distro** — QEMU/KVM runs on any kernel. This installs the deps, imports
 the VM, sets up the isolated network, and creates the menu shortcut:
 
-    curl -fsSL https://raw.githubusercontent.com/gabrielmf1998/radmin-linux/main/bootstrap.sh | bash
+    curl -fsSL https://raw.githubusercontent.com/gabrielmf1998/Radmin-Linux-KDE/main/bootstrap.sh | bash
 
 Prefer a native package? Build one for your package manager:
 

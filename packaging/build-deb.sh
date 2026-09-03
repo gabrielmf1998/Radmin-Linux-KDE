@@ -37,7 +37,7 @@ Architecture: all
 Depends: qemu-system-x86, qemu-utils, dnsmasq-base, network-manager, socat, python3, python3-venv, python3-pip, policykit-1
 Recommends: tigervnc-viewer
 Maintainer: gabrielmf1998 <110578985+gabrielmf1998@users.noreply.github.com>
-Homepage: https://github.com/gabrielmf1998/radmin-linux
+Homepage: https://github.com/gabrielmf1998/Radmin-Linux-KDE
 Description: Run Radmin VPN (Windows-only) on Linux via a headless VM
  Radmin VPN (Linux) drives the real Radmin VPN running inside a tiny headless
  Windows VM (512 MB RAM / 1 CPU), from a native Qt front-end. The user never

@@ -2,14 +2,14 @@
 # ============================================================
 #  bootstrap.sh - one-command install:
 #
-#    curl -fsSL https://raw.githubusercontent.com/gabrielmf1998/radmin-linux/main/bootstrap.sh | bash
+#    curl -fsSL https://raw.githubusercontent.com/gabrielmf1998/Radmin-Linux-KDE/main/bootstrap.sh | bash
 #
 #  Downloads the code, downloads the VM base image (from the release) and runs install.sh.
 #  Works on Fedora/Nobara, Debian/Ubuntu, Arch/Manjaro, openSUSE.
 # ============================================================
 set -euo pipefail
 
-REPO="${RADMIN_REPO:-gabrielmf1998/radmin-linux}"
+REPO="${RADMIN_REPO:-gabrielmf1998/Radmin-Linux-KDE}"
 BRANCH="${RADMIN_BRANCH:-main}"
 # the VM image (large) comes from a release; override with RADMIN_VM_URL
 VM_URL="${RADMIN_VM_URL:-https://github.com/$REPO/releases/latest/download/radmin-linux-base.qcow2.zst}"

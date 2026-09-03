@@ -4,7 +4,7 @@ Release:        1%{?dist}
 Summary:        Run Radmin VPN (Windows-only) on Linux via a headless VM
 
 License:        MIT
-URL:            https://github.com/gabrielmf1998/radmin-linux
+URL:            https://github.com/gabrielmf1998/Radmin-Linux-KDE
 BuildArch:      noarch
 
 Requires:       qemu-system-x86-core
