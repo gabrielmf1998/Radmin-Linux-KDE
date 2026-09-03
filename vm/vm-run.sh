@@ -9,9 +9,9 @@ for c in "$HERE/../env.sh" "$HERE/env.sh"; do [[ -f "$c" ]] && source "$c" && br
 : "${RADMIN_TAP:=tapradmin}"
 : "${RADMIN_HOST:=192.168.137.1}"
 DISK="$RADMIN_VMDIR/bench.qcow2"
-# Tiny footprint on purpose (512 MB / 1 CPU) so the VM never hogs the host.
+# Small footprint on purpose (1 GB / 1 CPU) so the VM never hogs the host.
 # Override with RADMIN_VM_RAM / RADMIN_VM_SMP if a peer's Windows needs more.
-RAM="${VM_RAM:-${RADMIN_VM_RAM:-512}}"; SMP="${VM_SMP:-${RADMIN_VM_SMP:-1}}"
+RAM="${VM_RAM:-${RADMIN_VM_RAM:-1024}}"; SMP="${VM_SMP:-${RADMIN_VM_SMP:-1}}"
 VNC_PORT="${VM_VNC:-3}"; RDP_PORT="${VM_RDP:-13391}"; RADMIN_PORT="${VM_RADMIN:-14899}"
 [[ -f "$DISK" ]] || { echo "image not found: $DISK"; exit 1; }
 

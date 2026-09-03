@@ -40,7 +40,7 @@ Maintainer: gabrielmf1998 <110578985+gabrielmf1998@users.noreply.github.com>
 Homepage: https://github.com/gabrielmf1998/Radmin-Linux-KDE
 Description: Run Radmin VPN (Windows-only) on Linux via a headless VM
  Radmin VPN (Linux) drives the real Radmin VPN running inside a tiny headless
- Windows VM (512 MB RAM / 1 CPU), from a native Qt front-end. The user never
+ Windows VM (1 GB RAM / 1 CPU), from a native Qt front-end. The user never
  opens the VM: the app powers it on/off, shows the mesh, connects/disconnects
  and self-heals. The VM image is provided separately (it is large and carries state).
 CTRL

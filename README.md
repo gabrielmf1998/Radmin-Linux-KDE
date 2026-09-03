@@ -22,13 +22,14 @@ Prefer a native package? Build one for your package manager:
 | Debian / Ubuntu (.deb) | `packaging/build-deb.sh` | `sudo apt install ./radmin-linux_*.deb` |
 | Arch / Manjaro (PKGBUILD) | `cd packaging && makepkg -si` | (makepkg installs it) |
 
-The VM image (~2-3 GB compressed) is fetched from the GitHub Release, not stored in git.
+**No ISO, no Windows install.** You get the **ready-made VM** (~2-3 GB compressed) from
+the GitHub Release — the installer just downloads and imports it. Nobody needs a Windows
+ISO or has to wait for Windows to install.
 
-> **Tiny footprint — 512 MB RAM · 1 CPU.** The bundled Windows VM runs on **512 MB of
-> RAM and a single CPU** on purpose, so it never hogs the machine of whoever installs
-> it. This is declared right in the app header. If a heavier Windows peer ever needs
-> more, override with `RADMIN_VM_RAM` / `RADMIN_VM_SMP` (Windows 7's own minimum is
-> 1 GB, so bump to 768-1024 if the VM is too slow to boot).
+> **Small footprint — 1 GB RAM · 1 CPU.** The bundled Windows VM runs on **1 GB of RAM
+> and a single CPU** on purpose, so it never hogs the machine of whoever installs it.
+> This is declared right in the app header. Override with `RADMIN_VM_RAM` /
+> `RADMIN_VM_SMP` if a heavier Windows peer ever needs more.
 
 ## Status (where we stopped)
 

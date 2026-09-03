@@ -25,8 +25,9 @@ export RADMIN_TAP_IP="${RADMIN_TAP_IP:-192.168.137.2/24}"
 # where the app code lives (this file's directory)
 export RADMIN_APP="${RADMIN_APP:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 
-# VM footprint — intentionally tiny so it never hurts the host: 512 MB RAM / 1 CPU
-export RADMIN_VM_RAM="${RADMIN_VM_RAM:-512}"
+# VM footprint — kept small so it never hurts the host: 1 GB RAM / 1 CPU
+# (Windows 7's minimum is 1 GB; 512 MB was too tight to boot reliably.)
+export RADMIN_VM_RAM="${RADMIN_VM_RAM:-1024}"
 export RADMIN_VM_SMP="${RADMIN_VM_SMP:-1}"
 
 # derived

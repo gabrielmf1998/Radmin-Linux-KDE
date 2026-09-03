@@ -57,9 +57,19 @@ VIEW_SCRIPT = _get("RADMIN_VIEW", f"{VMDIR}/bench-view.sh")
 SHIM_PATH = _get("RADMIN_SHIM", r"C:\radmin-shim.ps1")
 AGENT_DIR = _get("RADMIN_AGENT_DIR", r"C:\radmin-agent")
 
-# VM footprint — kept tiny so it never hurts the host (declared in the UI)
-VM_RAM = _get("RADMIN_VM_RAM", "512")   # MB
-VM_SMP = _get("RADMIN_VM_SMP", "1")     # vCPUs
+# VM footprint — kept small so it never hurts the host (declared in the UI)
+VM_RAM = _get("RADMIN_VM_RAM", "1024")   # MB
+VM_SMP = _get("RADMIN_VM_SMP", "1")      # vCPUs
+
+
+def vm_footprint() -> str:
+    """Human label for the header/About, e.g. '1 GB · 1 CPU' or '768 MB · 1 CPU'."""
+    try:
+        ram = int(VM_RAM)
+        r = f"{ram // 1024} GB" if ram >= 1024 and ram % 1024 == 0 else f"{ram} MB"
+    except ValueError:
+        r = f"{VM_RAM} MB"
+    return f"{r} · {VM_SMP} CPU"
 
 
 if __name__ == "__main__":

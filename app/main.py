@@ -364,8 +364,8 @@ class MainWindow(QMainWindow):
         logo = QLabel(); logo.setPixmap(icons.logo_pixmap(26)); hl.addWidget(logo)
         t = QLabel("RADMIN VPN"); t.setObjectName("logoText"); hl.addWidget(t)
         hl.addStretch(1)
-        # declared footprint: the VM is intentionally tiny so it never hogs the host
-        foot = QLabel(f"{config.VM_RAM} MB · {config.VM_SMP} CPU")
+        # declared footprint: the VM is intentionally small so it never hogs the host
+        foot = QLabel(config.vm_footprint())
         foot.setStyleSheet("color:#6f8290; font-size:10px; font-weight:600;")
         foot.setToolTip("The Windows VM uses only this much RAM/CPU — it won't hog your machine")
         hl.addWidget(foot)
@@ -1038,7 +1038,7 @@ class MainWindow(QMainWindow):
             "Windows 7 VM, over WMI. The power button turns the whole VM on/off;\n"
             "peers come live from the mesh; the VM self-heals in the background.\n"
             "Active peers via ARP/ping; nicknames are local.\n\n"
-            f"Tiny footprint: the VM uses only {config.VM_RAM} MB RAM · {config.VM_SMP} CPU, "
+            f"Small footprint: the VM uses only {config.vm_footprint()}, "
             "so it never hogs your machine.")
 
     def _show_raise(self):
